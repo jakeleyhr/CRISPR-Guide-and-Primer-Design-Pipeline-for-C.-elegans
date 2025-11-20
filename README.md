@@ -40,7 +40,7 @@ pip install pandas biopython pyfaidx primer3
 mkdir -p ~/Desktop/wbcel235
 cd ~/Desktop/wbcel235
 
-# C. elegans genome (WS235/ce11)
+# Download C. elegans genome (WS235/ce11)
 curl -o ce11.fa.gz http://hgdownload.soe.ucsc.edu/goldenPath/ce11/bigZips/ce11.fa.gz
 gunzip ce11.fa.gz
 
@@ -54,6 +54,7 @@ mkdir -p ~/Desktop/flashfry_cel_db
 cd ~/Desktop/flashfry_cel_db
 curl -L -o FlashFry-assembly-1.15.jar https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
 
+Build database (takes a couple of minutes)
 java -Xmx8g -jar FlashFry-assembly-1.15.jar \
     index \
     --tmpLocation /tmp \
@@ -66,42 +67,43 @@ cd ..
 
 ### 4. Run the pipeline
 ```bash
-# Step 1: Identify protein features
+# Step 1: Identify protein features (~40 genes/min)
 python 1_getproteinfeatures.py \
   --input genes_list.csv \
   --output 1.protein_features.csv \
   --flush-every 100
 
-# Step 2: Identify insertion sites
+# Step 2: Identify insertion sites (~60 genes/min)
 python 2_getinsertionsites.py \
   --input 1.protein_features.csv \
   --output 2.insertion_sites.csv \
   --flush-every 100
 
-# Step 3: Select optimal guides with off-target filtering
+# Step 3: Select optimal guides with off-target filtering (~15 sites/min)
 python 3_getguidesequences.py \
   --input 2.insertion_sites.csv \
   --output 3.allguideseqs.csv \
-  --genome wbcel235/ce11.fa \
+  --genome ~/Desktop/wbcel235/ce11.fa \
   --max-sgrnas 1 \
   --offtarget-mode flashfry \
-  --flashfry-db flashfry_cel_db/ce11_spcas9ngg_db \
+  --flashfry-db ~/Desktop/flashfry_cel_db/ce11_spcas9ngg_db \
+  --flashfry-jar ~/Desktop/FlashFry-assembly-1.15.jar \
   --flush-every 100
 
-# Step 4: Extract genomic sequences for primer design
+# Step 4: Extract genomic sequences for primer design (~500 sites/sec)
 python 4_getgenomicsequencearoundinsertion.py \
   --input 3.allguideseqs.csv \
   --output 4.allguidesandgenomicseqs.csv \
-  --genome wbcel235/ce11.fa \
+  --genome ~/Desktop/wbcel235/ce11.fa \
   --flush-every 10000
 
-# Step 5: Design inner homology arm primers with PAM disruption
+# Step 5: Design inner homology arm primers with PAM disruption (~300 sites/sec)
 python 5_designinnerprimers.py \
   --input 4.allguidesandgenomicseqs.csv \
   --output 5.allwormguidesinternalprimers.csv \
   --flush-every 100
 
-# Step 6: Design outer homology arm primers
+# Step 6: Design outer homology arm primers (very slow)
 
 
 # Step 7: Design genotyping/inital amplication primers
