@@ -121,19 +121,19 @@ python 5_designinnerprimers.py \
   --output 5.allwormguidesinternalprimers.csv \
   --flush-every 100
 
-# Step 6: Design outer homology arm primers (6 sites/min)
+# Step 6: Design outer homology arm primers (~6 sites/min)
 python 6_designouterprimers.py \
   --input 5.allwormguidesinternalprimers.csv \
   --output 6.allwormguidesbothprimers.csv \
   --genome wbcel235/ce11.fa \
   --flush-every 100
 
-# Step 7: Design genotyping/initial amplification primers
+# Step 7: Design genotyping/initial amplification primers (~400 sites/min)
 python 7_designgenotypingprimers.py \
   --input 6.allwormguidesbothprimers.csv \
   --output 7.finalfile.csv \
   --genome wbcel235/ce11.fa \
-  --flush-every 100
+  --batch-size 100
 ```
 
 ## Pipeline Details
@@ -167,7 +167,7 @@ Finally, this script designs a set of primers to amplify the whole span of the g
 ## Performance Tips
 
 ### For Large Gene Lists
-All processing scripts support `--flush-every` for incremental writing:
+Scripts 1-6 support `--flush-every` for incremental writing:
 ```bash
 python 3_getguidesequences.py \
   --input-sites sites.csv \
