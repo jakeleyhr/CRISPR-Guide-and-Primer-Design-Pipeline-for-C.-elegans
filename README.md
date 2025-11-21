@@ -195,9 +195,8 @@ python 3_getguidesequences.py \
 ```
 
 ## Citation
-
 If you use this pipeline in your research, please cite:
-- 
+- xyz
 
 
 **Note**: This pipeline was developed for *C. elegans* but the core logic should work for other organisms with appropriate genome files. The main species-specific component is the signal peptide prediction in script 1, which can be easily modified. Similarly, if you want to use your own list of insertion positions, you can skip to Step 3 and the pipeline should still work as intended, provided the insertion positions are all in-frame, otherwise scripts 4 and 5 will not correctly identify the reading frames for the silent mutations.
