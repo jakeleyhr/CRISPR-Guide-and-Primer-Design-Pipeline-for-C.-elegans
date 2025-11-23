@@ -22,10 +22,9 @@ Output:
       • upstream_arm_length, downstream_arm_length: Final amplicon sizes
       • Off-target descriptions
 
-Primer Nomenclature (Gene-Centric):
+Primer Nomenclature (Gene-centric):
   - P1 + P2 amplify gene UPSTREAM homology arm (500-1000bp target)
   - P3 + P4 amplify gene DOWNSTREAM homology arm (500-1000bp target)
-  
   For minus strand genes: gene upstream = genomic RIGHT side
   (Primer names always follow gene orientation, not genomic coordinates)
 
@@ -36,7 +35,7 @@ Design Strategy:
      - Target product size: 500-1000bp initially
      - Optimal Tm and length tries to match P1/P2
      - Prefentially chooses primer sequences with 3' GC-clamp
-  4. Verify primer uniqueness with BLAT (optional but recommended)
+  4. Verify primer uniqueness with BLAT (recommended)
   5. Annotate off-target hits and categorize by location
   6. Progressively falls back to target homology arms of up to 10kb if needed
 
@@ -48,7 +47,7 @@ Off-Target Detection (BLAT):
      amplifcation of region is performed prior to using these primers)
     * diff_chrom: Different chromosome
   - Falls back to best available primer if all have off-targets
-  - Can be disabled with --skip-offtarget-check for speed
+  - Can be disabled with --skip-offtarget-check
 
 Required arguments:
   --input PATH       Input CSV from script 5 with inner primers

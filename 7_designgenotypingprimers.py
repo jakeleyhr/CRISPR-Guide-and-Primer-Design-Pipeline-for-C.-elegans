@@ -34,7 +34,7 @@ Primer Design Strategy:
 Required arguments:
   --input PATH       Input CSV from script 6 with outer primers (P1 and P4)
   --output PATH      Output CSV path with genotyping primers
-  --genome PATH      Genome FASTA file (default: combined.fa)
+  --genome PATH      Genome FASTA file
 
 Optional arguments:
   General:
@@ -1516,7 +1516,7 @@ def main():
     )
     parser.add_argument('--input', required=True, help='Input CSV (must have primer_1_locus and primer_4_locus columns)')
     parser.add_argument('--output', required=True, help='Output CSV')
-    parser.add_argument('--genome', default='combined.fa', help='Genome FASTA (default: wbcel235/combined.fa)')
+    parser.add_argument('--genome', help='Genome FASTA')
     parser.add_argument('--batch-size', type=int, default=100, 
                        help='Process and save every N rows (default: 100)')
     parser.add_argument('--skip-offtarget-check', action='store_true',
@@ -1807,7 +1807,7 @@ def main():
     print(f"Success with off-target warnings: {with_warnings}")
     print(f"Failed: {len(completed) - success}")
     if all_failures:
-        print(f"\n📋 Detailed failure log: {args.failure_log}")
+        print(f"\nDetailed failure log: {args.failure_log}")
     print(f"{'='*70}\n")
 
 if __name__ == '__main__':
