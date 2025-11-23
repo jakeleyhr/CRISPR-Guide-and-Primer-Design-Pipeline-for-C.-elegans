@@ -4,7 +4,7 @@ A comprehensive Python-based pipeline for designing sgRNAs and PCR primers for C
 
 ## Overview
 
-This pipeline of 7 scripts automates the complete workflow from identification of post-translational protein features to ready-to-order guide and primers sequences:
+This pipeline of 8 scripts automates the complete workflow from identification of post-translational protein features to ready-to-order guide and primers sequences:
 
 1. **Identify mature protein sequence** - Identify signal peptides, lipidation sites, etc to identify permissive N- and C-terminal tagging locations for mature proteins
 2. **Identify insertion sites** - Convert mature protein termini into genomic coordinates
@@ -13,6 +13,7 @@ This pipeline of 7 scripts automates the complete workflow from identification o
 5. **Design inner primers** - Design inner homology arm primers with guide/PAM disrupting mutations
 6. **Design outer primers** - Design matching outer primers for amplification of homology arms
 7. **Design genotyping primers** - Design primers to verify successful insertions
+8. **Bonus - visualize the inner primer design** - Automatically render alignment schematic images
 
 The scripts vary in speed, but all support incremental processing with checkpoint/resume functionality, meaning thousands of genes can easily be gradually processed on personal laptops.
 
@@ -21,6 +22,7 @@ The scripts vary in speed, but all support incremental processing with checkpoin
 ### Core Dependencies
 - pandas
 - biopython
+- matplotlib
 - pyfaidx
 - primer3
 
@@ -32,7 +34,7 @@ The scripts vary in speed, but all support incremental processing with checkpoin
 
 ### 1. Install dependencies
 ```bash
-pip install pandas biopython pyfaidx primer3
+pip install pandas biopython matplotlib pyfaidx primer3
 ```
 
 ### 2. Download genome file
@@ -115,7 +117,7 @@ python 4_getgenomicsequencearoundinsertion.py \
   --genome ~/Desktop/wbcel235/ce11.fa \
   --flush-every 10000
 
-# Step 5: Design inner homology arm primers with PAM disruption (~300 sites/sec)
+# Step 5: Design inner homology arm primers with PAM disruption (~2000 sites/sec)
 python 5_designinnerprimers.py \
   --input 4.allguidesandgenomicseqs.csv \
   --output 5.allwormguidesinternalprimers.csv \
@@ -134,6 +136,11 @@ python 7_designgenotypingprimers.py \
   --output 7.finalfile.csv \
   --genome ~/Desktop/wbcel235/ce11.fa \
   --batch-size 200
+
+# Bonus: Visualize inner primer alignments (~300 sites/min)
+python 8.innerprimeralignments.py \
+    --input 7.finalfile.csv \
+    --outputdir alignments/
 ```
 
 ## Pipeline Details
@@ -151,7 +158,7 @@ From this point onwards, the remaining scripts run entirely locally. Using a loc
 This script extracts 100bp upstream and 100bp downstream of each insertion position, and carefully formats them such that bases on the distal side of the insertion site to the mature protein coding sequence are lower case, and mature protein coding bases are upper case. This formatting is necessary for identifying codon reading frames in the next processing step.
 
 ### Script 5: Inner Primer Design with PAM Disruption
-Using the local genomic region extracted in the previous step, this script designs Primer 2 and Primer 3 sequences. These are defined as the 30-35bp immediately upstream (Primer 2) and downstream (Primer 3) of the insertion site, using the gene's 5'>3' direction. Critically, silent mutations are introduced at this stage to prevent Cas9 from cutting the vector or the repaired allele. If the guide sequence spans the insertion site, such that fewer than 18 bases of the 23bp guide (protospacer plus PAM) are on one side of the insertion site, no mutations are needed, as these two sides of the guide will be split by the knock-in sequence. However, if the guide is only or primarily on the left or right side of the insertion site, then silent mutations need to be introduced into Primers 2 or 3, respectively. The script recognises the codon reading frame, and attempts to make a silent mutation that disrupts the PAM site. If successful, it introduces an additional 3 silent mutations to the 3' end of the guide sequence. If not, it introduces a total of 5 silent mutations to the 3' end of the guide sequence. All these numbers are adjustable. If the guide sequence is too far away from the insertion site for the 35bp length of the primer to reach it in order to introduce the silent mutations while maintaining 15 3' bases intact to ensure good binding, and additional primer, designated 2A or 3A is designed that overlaps with Primer 2 (2B) or 3 (3B) by 20bp.
+Using the local genomic region extracted in the previous step, this script designs Primer 2 and Primer 3 sequences. These are defined as the 30-35bp immediately upstream (Primer 2) and downstream (Primer 3) of the insertion site, using the gene's 5'>3' direction. Critically, silent mutations are introduced at this stage to prevent Cas9 from cutting the vector or the repaired allele. If the guide sequence spans the insertion site, such that fewer than 18 bases of the 23bp guide (protospacer plus PAM) are on one side of the insertion site, no mutations are needed, as these two sides of the guide will be split by the knock-in sequence. However, if the guide is only or primarily on the left or right side of the insertion site, then silent mutations need to be introduced into Primers 2 or 3, respectively. The script recognises the codon reading frame, and attempts to make a silent mutation that disrupts the PAM site. If successful, it introduces an additional 3 silent mutations to the 3' end of the guide sequence. If not, it introduces a total of 5 silent mutations to the 3' end of the guide sequence. All these numbers are adjustable. If the guide sequence is too far away from the insertion site for the 35bp length of the primer to reach it in order to introduce the silent mutations while maintaining 15 3' bases intact to ensure good binding, and additional primer, designated 2A or 3A is designed that overlaps with Primer 2 (2B) or 3 (3B) by 20bp. The introduction of silent mutations is not strictly coding-sequence aware, so even non-coding sequence e.g. 5' UTR upstream of the start codon in an N-temrinal insertion will be mutated as though they were coding.
 
 ### Script 6: Outer Primer Design
 This script designs Primers 1 and 4, which pair with Primers 2 and 3, respectively, to amplify the homology arms on either side of the insertion site. It works by extracting genomic sequences and searching for primers that would amplify homology arms of the target size (500-1000bp by default), which have similar annealing temperatures to Primer 2/3. It prefers primers with a 3' GC-clamp, and also performs a BLAT search to ensure that the primers are specific. If no suitable primers can be found, it progressively searches larger and larger regions up to 10kb. In our experience, the length of the homology arms makes little difference to knock-in efficiency, provided they are at least 500bp. Primers with off-targets are only accepted as a last resort, and preferentially those with distant off-targets that are less likely to interfere.
@@ -160,7 +167,9 @@ This script designs Primers 1 and 4, which pair with Primers 2 and 3, respective
 Finally, this script designs a set of primers to amplify the whole span of the genome of interest, which can be used for genotyping the successful insertion, and/or for amplifying the region in an initial PCR so the homology arms can be amplified from this fragment rather than the whole genome, where primer overhangs and long sequences could make the reaction harder to optimize. It finds the span from the start of Primer 1 to the end of Primer 4 (the target region) plus an additional flanking 1kb, and searches for suitable and specific (BLAT search) primers that amplify the target region. If none are found, it progressively widens the flanks up to a maximum (e.g. 5kb). If still none are found, the primer properties (length, Tm) are relaxed. Again, primers with off-targets are only accepted as a last resort, and preferentially those with distant off-targets that are less likely to interfere.
 
 
-### Bonus Script: Visualizing the Inner Primer Design
+### Bonus Script: Visualizing the Inner Primer Designs
+As a bonus, this script can use run on any of the output CSVs after script 5 to automatically visualize the alignment of the guide and inner primer (Primer 2 (A/B) and Primer 3 (A/B) to the genomic sequence. By reading in key columns including the genomic context and designed features, this script produces one PNG image per target site, showing all the sequence alignments in schematic view, with the PAM site and any introduced silent mutations to the primers highlighted. The genomic sequence is always displayed from left to right following the gene's orientation, with the transition from upper case to lower case, or vice versa, representing the target insertion site. Primer 2 sequences are shown as reverse complemented in order to better show the sequence alignment. See below for an example of the C-terminal insertion site for aap-1:
+<img width="2985" height="449" alt="aap-1_Cterm_1" src="https://github.com/user-attachments/assets/e0d040fb-2c55-4fc9-a767-2b5dd49f84c0" />
 
 
 
