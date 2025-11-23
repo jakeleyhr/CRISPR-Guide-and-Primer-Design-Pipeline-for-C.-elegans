@@ -125,15 +125,15 @@ python 5_designinnerprimers.py \
 python 6_designouterprimers.py \
   --input 5.allwormguidesinternalprimers.csv \
   --output 6.allwormguidesbothprimers.csv \
-  --genome wbcel235/ce11.fa \
+  --genome ~/Desktop/wbcel235/ce11.fa \
   --flush-every 100
 
 # Step 7: Design genotyping/initial amplification primers (~400 sites/min)
 python 7_designgenotypingprimers.py \
   --input 6.allwormguidesbothprimers.csv \
   --output 7.finalfile.csv \
-  --genome wbcel235/ce11.fa \
-  --batch-size 100
+  --genome ~/Desktop/wbcel235/ce11.fa \
+  --batch-size 200
 ```
 
 ## Pipeline Details
@@ -196,7 +196,7 @@ python 3_getguidesequences.py \
 
 ## Citation
 If you use this pipeline in your research, please cite:
-- xyz
+- Leyhr, J. et al. (2025) WormTagDB: Systematic Survey of Endogenously Tagged Proteins in C. elegans and a Roadmap Towards the Tagged Proteome. Submitted.
 
 
 **Note**: This pipeline was developed for *C. elegans* but the core logic should work for other organisms with appropriate genome files. The main species-specific component is the signal peptide prediction in script 1, which can be easily modified. Similarly, if you want to use your own list of insertion positions, you can skip to Step 3 and the pipeline should still work as intended, provided the insertion positions are all in-frame, otherwise scripts 4 and 5 will not correctly identify the reading frames for the silent mutations.
