@@ -22,6 +22,8 @@ Processing Strategy:
   1. Chain mode (when PTM detected): Uses Chain_regions from UniProt to define
      the mature protein after signal peptide cleavage, propeptide removal, or methionine
      excision. Insertion sites are computed relative to the mature chain boundaries.
+     If a terminal lipidation site(s) is present, the insertion is made 5aa proximal to
+     the terminus to avoid disrupting the lipidation site.
      
   2. Full mode (no PTMs): Uses complete translation boundaries from start to
      stop codon when no post-translational modifications are detected.
@@ -362,48 +364,6 @@ def compute_sites_for_row(session: requests.Session, row: pd.Series) -> List[Dic
 
     use_chain = any_nonempty(row.get("iMET_events"), row.get("SP_regions"), row.get("Propeptides"), row.get("Transit_peptides"))
     chain_rng = first_range(row.get("Chain_regions")) if use_chain else None
-    
-    # --- adjust chain start/end to avoid terminal lipidation sites ---
-    try:
-        _chain_start, _chain_end = chain_rng if chain_rng else (None, None)
-    except Exception:
-        _chain_start, _chain_end = (None, None)
-
-    _lip = row.get("Lipidation_sites") if hasattr(row, "get") else None
-
-    if _chain_start is not None and _chain_end is not None and _lip is not None and str(_lip).strip() and str(_lip).strip().lower() != "nan":
-        _lip_ranges = _extract_ranges_from_text(_lip)  # expected list of (a,b) integers
-
-        # find ranges that overlap the chain start and chain end
-        start_overlaps = [(a,b) for (a,b) in _lip_ranges if a <= _chain_start <= b]
-        end_overlaps   = [(a,b) for (a,b) in _lip_ranges if a <= _chain_end   <= b]
-
-        new_start = _chain_start
-        new_end   = _chain_end
-
-        # If start is overlapped, push start to just after the furthest overlapping end
-        if start_overlaps:
-            max_b = max(b for (_,b) in start_overlaps)
-            new_start = max_b + 1
-
-        # If end is overlapped, pull end to just before the earliest overlapping start
-        if end_overlaps:
-            min_a = min(a for (a,_) in end_overlaps)
-            new_end = min_a - 1
-
-        # accept changes only if they result in a valid range
-        if new_start != _chain_start or new_end != _chain_end:
-            if new_start <= new_end:
-                chain_rng = (new_start, new_end)
-                try:
-                    row["Chain_regions"] = f"{new_start}_{new_end}"
-                except Exception:
-                    pass
-            else:
-                # trimming would remove the entire chain; skip or handle as needed
-                pass
-
-    
 
     tj = lookup_id(session, str(t_in).strip(), expand=1) if t_in else None
     if not tj or tj.get("object_type") != "Transcript":
@@ -468,7 +428,7 @@ def compute_sites_for_row(session: requests.Session, row: pd.Series) -> List[Dic
         aa_len = None
         cds_len_nt = None
 
-    # Choose chain vs full AA span
+    # Choose chain vs full AA span - ALWAYS use original chain first
     if chain_rng and aa_len:
         aa_start, aa_end = chain_rng
         aa_start = max(1, min(int(aa_start), aa_len))
@@ -480,26 +440,76 @@ def compute_sites_for_row(session: requests.Session, row: pd.Series) -> List[Dic
         aa_start, aa_end = 1, aa_len if aa_len else 1
         mode = "full"
 
+    # Store the original chain values (these will go in chain_aa_start/end columns)
+    original_chain_start = aa_start
+    original_chain_end = aa_end
+
+    # --- Calculate adjusted coordinates based on lipidation ---
+    try:
+        _chain_start, _chain_end = (aa_start, aa_end)
+    except Exception:
+        _chain_start, _chain_end = (None, None)
+
+    adjusted_start = None
+    adjusted_end = None
+
+    _lip = row.get("Lipidation_sites") if hasattr(row, "get") else None
+    if _chain_start is not None and _chain_end is not None and _lip is not None and str(_lip).strip() and str(_lip).strip().lower() != "nan":
+        _lip_ranges = _extract_ranges_from_text(_lip)
+        
+        TERMINAL_THRESHOLD = 5
+        
+        start_overlaps = [(a,b) for (a,b) in _lip_ranges if a <= _chain_start + TERMINAL_THRESHOLD]
+        end_overlaps   = [(a,b) for (a,b) in _lip_ranges if b >= _chain_end - TERMINAL_THRESHOLD]
+        
+        adjustment_made = False
+        temp_start = _chain_start
+        temp_end = _chain_end
+        
+        if start_overlaps:
+            max_b = max(b for (_,b) in start_overlaps)
+            temp_start = max_b + 5 # new insertion site 5aa downstream of N-term
+            adjustment_made = True
+        
+        if end_overlaps:
+            min_a = min(a for (a,_) in end_overlaps)
+            temp_end = min_a - 5 # new insertion site 5aa upstream of C-term
+            adjustment_made = True
+        
+        # Only set adjusted values if actually different from original
+        if adjustment_made and temp_start <= temp_end:
+            if temp_start != _chain_start or temp_end != _chain_end:
+                adjusted_start = temp_start
+                adjusted_end = temp_end
+
+    # Now use adjusted coordinates for genomic calculations if they exist
+    if adjusted_start is not None and adjusted_end is not None:
+        aa_start_for_coords = adjusted_start
+        aa_end_for_coords = adjusted_end
+    else:
+        aa_start_for_coords = aa_start
+        aa_end_for_coords = aa_end
+
     # --- Override C-term to Ensembl length if UniProt shorter and no C features ---
-    effective_aa_end = aa_end
+    effective_aa_end = aa_end_for_coords
     override_note = None
-    if mode == "chain" and aa_len and aa_end < aa_len:
+    if mode == "chain" and aa_len and aa_end_for_coords < aa_len:
         c_features_present = any_nonempty(row.get("Propeptides")) or any_nonempty(row.get("Transit_peptides"))
         if not c_features_present:
             effective_aa_end = aa_len
             override_note = f"override_c_end_to_ensembl_len({aa_len})"
 
     # Reasons (side-specific) using the effective end
-    n_reason, c_reason = build_chain_reason_pair(row, mode == "chain", int(aa_start) if aa_len else None, int(effective_aa_end) if aa_len else None, int(aa_len) if aa_len else None)
-    print(f"[debug] mode={mode} aa_len={aa_len} chain=({aa_start},{aa_end}) eff_end={effective_aa_end} for tx={tx_id}; reasons N='{n_reason}' C='{c_reason}' override={override_note}")
+    n_reason, c_reason = build_chain_reason_pair(row, mode == "chain", int(aa_start_for_coords) if aa_len else None, int(effective_aa_end) if aa_len else None, int(aa_len) if aa_len else None)
+    print(f"[debug] mode={mode} aa_len={aa_len} chain=({original_chain_start},{original_chain_end}) adjusted=({adjusted_start},{adjusted_end}) coords=({aa_start_for_coords},{aa_end_for_coords}) eff_end={effective_aa_end} for tx={tx_id}; reasons N='{n_reason}' C='{c_reason}' override={override_note}")
 
-    # AA -> CDS nt span
+    # AA -> CDS nt span (using coordinates for genomic mapping)
     def aa_to_cds_nt_span(aidx: int) -> Tuple[int,int]:
         s = (aidx - 1) * 3 + 1
         e = s + 2
         return s, e
 
-    n_cds_span = aa_to_cds_nt_span(int(aa_start)) if cds_len_nt else None
+    n_cds_span = aa_to_cds_nt_span(int(aa_start_for_coords)) if cds_len_nt else None
     c_cds_span = aa_to_cds_nt_span(int(effective_aa_end)) if cds_len_nt else None
 
     # --- cDNA genomic endpoints (first and last coding nucleotides) ---
@@ -535,7 +545,7 @@ def compute_sites_for_row(session: requests.Session, row: pd.Series) -> List[Dic
     chrom_C = pos_C = None
 
     if n_cds_span:
-        print(f"[debug] N aa={aa_start} cds_span={n_cds_span}")
+        print(f"[debug] N aa={aa_start_for_coords} cds_span={n_cds_span}")
         n_maps = map_cds_to_genome(session, tx_id, n_cds_span[0], n_cds_span[1])
         if n_maps:
             chrom_N, pos_N, strand_symbol = insertion_from_codon_blocks(n_maps, 'N')
@@ -560,7 +570,7 @@ def compute_sites_for_row(session: requests.Session, row: pd.Series) -> List[Dic
         cdna_start = int(tr["start"])
         cdna_end   = int(tr["end"])
         if mode == "chain":
-            boundary_cdna_n = cdna_start + (int(aa_start) - 1) * 3
+            boundary_cdna_n = cdna_start + (int(aa_start_for_coords) - 1) * 3
             boundary_cdna_c = cdna_start + (int(effective_aa_end) * 3)
         else:
             boundary_cdna_n = cdna_start
@@ -582,7 +592,10 @@ def compute_sites_for_row(session: requests.Session, row: pd.Series) -> List[Dic
         "uniprot": uniprot,
         "protein_len": row.get("protein_len"),
         "mode": mode,
-        "chain_aa_start": int(aa_start) if aa_len else None,
+        "chain_aa_start": int(original_chain_start) if aa_len else None,
+        "Chain_adjusted_start": adjusted_start, 
+        "Chain_adjusted_end": adjusted_end,   
+        "Chain_adjusted_regions": f"{adjusted_start}_{adjusted_end}" if (adjusted_start is not None and adjusted_end is not None) else None, 
         "strand": strand_symbol,
         "cdna_start_chrom": cdna_start_chrom, 
         "cdna_start_pos": cdna_start_pos,
@@ -598,7 +611,7 @@ def compute_sites_for_row(session: requests.Session, row: pd.Series) -> List[Dic
         **base_record,
         "site_type": "Nterm",
         "chain_reason": n_reason,
-        "chain_aa_end": int(aa_end) if aa_len else None,
+        "chain_aa_end": int(original_chain_end) if aa_len else None,
         "chrom": chrom_N, 
         "pos": pos_N,
         "bases_from_cdna_start": (n_cds_span[0]) if n_cds_span else None,
@@ -615,7 +628,7 @@ def compute_sites_for_row(session: requests.Session, row: pd.Series) -> List[Dic
         **base_record,
         "site_type": "Cterm",
         "chain_reason": c_reason,
-        "chain_aa_end": int(effective_aa_end) if aa_len else None,
+        "chain_aa_end": int(original_chain_end) if aa_len else None,
         "chrom": chrom_C, 
         "pos": pos_C,
         "bases_from_cdna_start": (c_cds_span[1]) if c_cds_span else None,
@@ -800,7 +813,11 @@ def main():
         df = df.head(args.max_rows)
 
     # Prepare output for incremental write/resume
-    cols_for_write = ['gene', 'WBGene', 'input_transcript', 'uniprot', 'protein_len', 'site_type', 'mode', 'chain_reason', 'chain_aa_start', 'chain_aa_end', 'chrom', 'pos', 'strand', 'cdna_start_pos', 'bases_from_cdna_start', 'cdna_end_pos', 'bases_from_cdna_end', 'features_summary', 'source', 'warning']
+    cols_for_write = ['gene', 'WBGene', 'input_transcript', 'uniprot', 'protein_len', 
+                    'site_type', 'mode', 'chain_reason', 'chain_aa_start', 'chain_aa_end', 
+                    'Chain_adjusted_start', 'Chain_adjusted_end', 'Chain_adjusted_regions',
+                    'chrom', 'pos', 'strand', 'cdna_start_pos', 'bases_from_cdna_start', 
+                    'cdna_end_pos', 'bases_from_cdna_end', 'features_summary', 'source', 'warning']
     out_path = args.output
     # initialize/overwrite per --no-resume
     if args.no_resume and os.path.exists(out_path):

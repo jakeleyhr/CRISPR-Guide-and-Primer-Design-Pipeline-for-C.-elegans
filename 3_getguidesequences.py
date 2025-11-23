@@ -794,7 +794,7 @@ def main():
     # Prepare output for incremental write/resume
     cols_for_write = [
         'gene','WBGene','input_transcript','uniprot','protein_len','mode','chain_reason',
-        'chain_aa_start','chain_aa_end','kept_aa_len',
+        'chain_aa_start','chain_aa_end','chain_adjusted_start','chain_adjusted_end','kept_aa_len',
         'warning', 'site_type','chrom','pos','strand',
         'guide_seq','guide_len','cut_genomic','distance_to_insertion','gc','on_target_score','off_target_hits','off_target_locations','transcription_type'
     ]
@@ -850,7 +850,7 @@ def main():
         print(f"[warn] FlashFry disabled: {flashfry_disabled_reason}", file=sys.stderr)
 
     # Validate columns
-    req_cols = ['gene','WBGene','input_transcript','uniprot','protein_len','site_type','mode','chain_reason','chain_aa_start','chain_aa_end','chrom','pos','strand']
+    req_cols = ['gene','WBGene','input_transcript','uniprot','protein_len','site_type','mode','chain_reason','chain_aa_start','chain_aa_end','Chain_adjusted_start','Chain_adjusted_end','chrom','pos','strand']
     missing = [c for c in req_cols if c not in df.columns]
     if missing:
         print(f"[error] Input CSV missing required columns: {missing}")
@@ -1328,11 +1328,17 @@ def main():
                     off_target_locations = "; ".join(locations)
                 
                 site_rows.append({
-                    'gene': row.get('gene'), 'WBGene': row.get('WBGene'),
-                    'input_transcript': row.get('input_transcript'), 'uniprot': row.get('uniprot'),
-                    'protein_len': row.get('protein_len'), 'mode': row.get('mode'),
+                    'gene': row.get('gene'), 
+                    'WBGene': row.get('WBGene'),
+                    'input_transcript': row.get('input_transcript'), 
+                    'uniprot': row.get('uniprot'),
+                    'protein_len': row.get('protein_len'), 
+                    'mode': row.get('mode'),
                     'chain_reason': row.get('chain_reason'),
-                    'chain_aa_start': row.get('chain_aa_start'), 'chain_aa_end': row.get('chain_aa_end'),
+                    'chain_aa_start': row.get('chain_aa_start'), 
+                    'chain_aa_end': row.get('chain_aa_end'),
+                    'chain_adjusted_start': row.get('Chain_adjusted_start'), 
+                    'chain_adjusted_end': row.get('Chain_adjusted_end'),
                     'kept_aa_len': (int(row.get('chain_aa_end')) - int(row.get('chain_aa_start')) + 1
                                     if pd.notna(row.get('chain_aa_end')) and pd.notna(row.get('chain_aa_start')) else None), 'warning': row.get('warning'), 'site_type': site_type, 'chrom': chrom, 'pos': pos, 'strand': strand,
                     'guide_seq': g.protospacer + g.pam_seq, 'guide_len': g.guide_len,

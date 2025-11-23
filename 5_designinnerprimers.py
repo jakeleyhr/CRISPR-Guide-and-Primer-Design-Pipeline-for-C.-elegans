@@ -978,12 +978,17 @@ def process_guide(row: pd.Series, row_num: int, args) -> Dict:
             
             # Get positions of all mutated nucleotides
             mutated_nt_positions = set()
-            for codon_idx, orig, mut in mutated_codon_info:
-                for pos_in_codon in range(3):
-                    if orig[pos_in_codon] != mut[pos_in_codon]:
-                        # This nucleotide position is mutated (in genomic_context coordinates)
-                        nt_pos = reading_frame_start + codon_idx * 3 + pos_in_codon
-                        mutated_nt_positions.add(nt_pos)
+            for m in mutations_list:
+                codon_idx = m['codon_index']
+                orig = m['original_codon']
+                mut = m['mutated_codon']
+                positions_in_guide = m.get('positions_in_guide', [0, 1, 2])  # Default to all positions if not stored
+                
+                for pos_in_codon in positions_in_guide:  # Only check positions actually in guide
+                    if pos_in_codon < len(orig) and pos_in_codon < len(mut):
+                        if orig[pos_in_codon] != mut[pos_in_codon]:
+                            nt_pos = reading_frame_start + codon_idx * 3 + pos_in_codon
+                            mutated_nt_positions.add(nt_pos)
             
             print(f"Already mutated nucleotide positions: {sorted(mutated_nt_positions)}")
             
@@ -1034,11 +1039,12 @@ def process_guide(row: pd.Series, row_num: int, args) -> Dict:
                     new_mutation_positions = []
                     for pos_in_codon in positions_in_guide:
                         if candidate_codon[pos_in_codon] != original_codon[pos_in_codon]:
-                            if site_type == 'Nterm':
-                                nt_pos = codon_idx * 3 + pos_in_codon
-                            else:
-                                nt_pos = reading_frame_start + codon_idx * 3 + pos_in_codon
+                            nt_pos = reading_frame_start + codon_idx * 3 + pos_in_codon
                             new_mutation_positions.append(nt_pos)
+                    
+                    # DEBUG OUTPUT
+                    print(f"    DEBUG: Candidate {candidate_codon}, new_mutation_positions = {new_mutation_positions}")
+                    print(f"    DEBUG: mutated_nt_positions = {sorted(mutated_nt_positions)}")
                     
                     # Check if any new mutation position is adjacent to existing ones
                     has_adjacent = False
@@ -1046,6 +1052,17 @@ def process_guide(row: pd.Series, row_num: int, args) -> Dict:
                         if (new_pos - 1 in mutated_nt_positions) or (new_pos + 1 in mutated_nt_positions):
                             has_adjacent = True
                             break
+                        # Also check if new positions are adjacent to each other (within same codon)
+                    if not has_adjacent and len(new_mutation_positions) > 1:
+                        sorted_new_pos = sorted(new_mutation_positions)
+                        for i in range(len(sorted_new_pos) - 1):
+                            if sorted_new_pos[i+1] - sorted_new_pos[i] == 1:
+                                has_adjacent = True
+                                print(f"  Skipping option {original_codon} -> {candidate_codon} (creates adjacent changes within same codon at positions {sorted_new_pos})")
+                                break
+                    
+                    # DEBUG OUTPUT
+                    print(f"    DEBUG: has_adjacent = {has_adjacent}")
                     
                     if has_adjacent:
                         print(f"  Skipping option {original_codon} -> {final_codon} (would create adjacent nucleotide mutations at positions {new_mutation_positions})")
@@ -1108,13 +1125,13 @@ def process_guide(row: pd.Series, row_num: int, args) -> Dict:
                 codon_idx = mut['codon_index']
                 orig = mut['original_codon']
                 mutated = mut['mutated_codon']
-                for pos_in_codon in range(3):
-                    if orig[pos_in_codon] != mutated[pos_in_codon]:
-                        if site_type == 'Nterm':
-                            nt_pos = codon_idx * 3 + pos_in_codon
-                        else:
+                positions_in_guide = mut.get('positions_in_guide', [0, 1, 2])  # Default to all positions if not stored
+                
+                for pos_in_codon in positions_in_guide:  # Only check positions actually in guide
+                    if pos_in_codon < len(orig) and pos_in_codon < len(mutated):
+                        if orig[pos_in_codon] != mutated[pos_in_codon]:
                             nt_pos = reading_frame_start + codon_idx * 3 + pos_in_codon
-                        mutated_nt_positions.add(nt_pos)
+                            mutated_nt_positions.add(nt_pos)
             
             print(f"Already mutated nucleotide positions: {sorted(mutated_nt_positions)}")
             
@@ -1161,11 +1178,12 @@ def process_guide(row: pd.Series, row_num: int, args) -> Dict:
                     new_mutation_positions = []
                     for pos_in_codon in positions_in_guide:
                         if candidate_codon[pos_in_codon] != original_codon[pos_in_codon]:
-                            if site_type == 'Nterm':
-                                nt_pos = codon_idx * 3 + pos_in_codon
-                            else:
-                                nt_pos = reading_frame_start + codon_idx * 3 + pos_in_codon
+                            nt_pos = reading_frame_start + codon_idx * 3 + pos_in_codon
                             new_mutation_positions.append(nt_pos)
+                    
+                    # DEBUG OUTPUT
+                    print(f"    DEBUG: Candidate {candidate_codon}, new_mutation_positions = {new_mutation_positions}")
+                    print(f"    DEBUG: mutated_nt_positions = {sorted(mutated_nt_positions)}")
                     
                     # Check if any new mutation position is adjacent to existing ones
                     has_adjacent = False
@@ -1173,6 +1191,16 @@ def process_guide(row: pd.Series, row_num: int, args) -> Dict:
                         if (new_pos - 1 in mutated_nt_positions) or (new_pos + 1 in mutated_nt_positions):
                             has_adjacent = True
                             break
+                        # Also check if new positions are adjacent to each other (within same codon)
+                    if not has_adjacent and len(new_mutation_positions) > 1:
+                        sorted_new_pos = sorted(new_mutation_positions)
+                        for i in range(len(sorted_new_pos) - 1):
+                            if sorted_new_pos[i+1] - sorted_new_pos[i] == 1:
+                                has_adjacent = True
+                                print(f"  Skipping option {original_codon} -> {candidate_codon} (creates adjacent changes within same codon at positions {sorted_new_pos})")
+                                break
+                    # DEBUG OUTPUT
+                    print(f"    DEBUG: has_adjacent = {has_adjacent}")
                     
                     if has_adjacent:
                         print(f"  Skipping option {original_codon} -> {final_codon} (would create adjacent nucleotide mutations at positions {new_mutation_positions})")
@@ -1417,7 +1445,7 @@ def process_guide(row: pd.Series, row_num: int, args) -> Dict:
                 
                 # Primer 3 (forward primer, binds to plus strand)
                 primer_3_start = insertion_genomic
-                primer_3_end = insertion_genomic + args.min_primer_len - 1
+                primer_3_end = insertion_genomic + args.max_primer_len - 1
                 primer_3_strand = '+'
 
             else:  # gene_strand == '-'
@@ -1428,7 +1456,7 @@ def process_guide(row: pd.Series, row_num: int, args) -> Dict:
                 primer_2_strand = '+'
                 
                 # Primer 3 (reverse primer relative to gene, but gene is on minus strand)
-                primer_3_start = insertion_genomic - args.min_primer_len
+                primer_3_start = insertion_genomic - args.max_primer_len
                 primer_3_end = insertion_genomic - 1
                 primer_3_strand = '-'
 
