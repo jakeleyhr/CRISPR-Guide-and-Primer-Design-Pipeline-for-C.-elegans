@@ -593,9 +593,9 @@ def compute_sites_for_row(session: requests.Session, row: pd.Series) -> List[Dic
         "protein_len": row.get("protein_len"),
         "mode": mode,
         "chain_aa_start": int(original_chain_start) if aa_len else None,
-        "Chain_adjusted_start": adjusted_start, 
-        "Chain_adjusted_end": adjusted_end,   
-        "Chain_adjusted_regions": f"{adjusted_start}_{adjusted_end}" if (adjusted_start is not None and adjusted_end is not None) else None, 
+        "chain_adjusted_start": adjusted_start, 
+        "chain_adjusted_end": adjusted_end,   
+        "chain_adjusted_regions": f"{adjusted_start}_{adjusted_end}" if (adjusted_start is not None and adjusted_end is not None) else None, 
         "strand": strand_symbol,
         "cdna_start_chrom": cdna_start_chrom, 
         "cdna_start_pos": cdna_start_pos,
@@ -815,7 +815,7 @@ def main():
     # Prepare output for incremental write/resume
     cols_for_write = ['gene', 'WBGene', 'input_transcript', 'uniprot', 'protein_len', 
                     'site_type', 'mode', 'chain_reason', 'chain_aa_start', 'chain_aa_end', 
-                    'Chain_adjusted_start', 'Chain_adjusted_end', 'Chain_adjusted_regions',
+                    'chain_adjusted_start', 'chain_adjusted_end', 'chain_adjusted_regions',
                     'chrom', 'pos', 'strand', 'cdna_start_pos', 'bases_from_cdna_start', 
                     'cdna_end_pos', 'bases_from_cdna_end', 'features_summary', 'source', 'warning']
     out_path = args.output

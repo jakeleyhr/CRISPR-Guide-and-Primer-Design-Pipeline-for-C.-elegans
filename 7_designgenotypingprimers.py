@@ -81,13 +81,13 @@ Example:
     --initial-flank 2000 \
     --max-flank 8000
 
-  Recommended: install BLAT (for off-target checking)
-    - mkdir -p ~/bin  # Create bin directory if it doesn't exist
-    - cd ~/bin
-    - curl -o blat http://hgdownload.soe.ucsc.edu/admin/exe/macOSX.x86_64/blat/blat
-    - chmod +x blat  # Make it executable
-    - echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc  # Add to PATH permanently
-    - blat  # Test
+Recommended: install BLAT (for off-target checking)
+  - mkdir -p ~/bin  # Create bin directory if it doesn't exist
+  - cd ~/bin
+  - curl -o blat http://hgdownload.soe.ucsc.edu/admin/exe/macOSX.x86_64/blat/blat
+  - chmod +x blat  # Make it executable
+  - echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc  # Add to PATH permanently
+  - blat  # Test
 """
 
 
@@ -880,7 +880,7 @@ def process_batch_with_offtarget_check(rows_data, genome, genome_fasta_path, bat
                 best_pair = primer_pair
                 best_alt_idx = alt_idx
                 if alt_idx == 0:
-                    best_notes = 'Clean (first choice)'
+                    best_notes = 'No off-targets'
                 else:
                     best_notes = f'Clean (alternative #{alt_idx + 1})'
                 clean_count += 1
@@ -911,9 +911,9 @@ def process_batch_with_offtarget_check(rows_data, genome, genome_fasta_path, bat
             })
         else:
             if best_alt_idx == 0:
-                print(f"  Row {row_idx+1:3d} ({gene_name:20s}): ✓ Clean (first choice)")
+                print(f"  Row {row_idx+1:3d} ({gene_name:20s}):  No off-targets")
             else:
-                print(f"  Row {row_idx+1:3d} ({gene_name:20s}): ✓ Clean (alternative #{best_alt_idx + 1}/{len(alternatives)})")
+                print(f"  Row {row_idx+1:3d} ({gene_name:20s}):  Clean (alternative #{best_alt_idx + 1}/{len(alternatives)})")
             
             result = {
                 'genotyping_primer_left_seq': best_pair['left_seq'],
@@ -988,7 +988,7 @@ def process_batch_with_offtarget_check(rows_data, genome, genome_fasta_path, bat
                     }
                     batch_results.append((row_idx, result))
                     rescue_count += 1
-                    print(f"       ✓ RESCUED: Paired alt#{left['alt_idx']+1} left with alt#{right['alt_idx']+1} right")
+                    print(f"        RESCUED: Paired alt#{left['alt_idx']+1} left with alt#{right['alt_idx']+1} right")
                 else:
                     rows_still_failing.append(rescue_data)
             else:
@@ -1132,7 +1132,7 @@ def process_batch_with_offtarget_check(rows_data, genome, genome_fasta_path, bat
                         rescued = True
                         widening_rescued += 1
                         rescued_this_flank.append(rescue_data)
-                        print(f"    Row {row_idx+1:4d} ({gene_name:20s}): ✓ Rescued")
+                        print(f"    Row {row_idx+1:4d} ({gene_name:20s}):  Rescued")
                         break
                 
                 if not rescued:
@@ -1205,7 +1205,7 @@ def process_batch_with_offtarget_check(rows_data, genome, genome_fasta_path, bat
                                 widening_rescued += 1
                                 mixmatch_rescued += 1
                                 found_pair = True
-                                print(f"    Row {row_idx+1:4d} ({gene_name:20s}): ✓ Mix-matched")
+                                print(f"    Row {row_idx+1:4d} ({gene_name:20s}):  Mix-matched")
                                 break
                         
                         if found_pair:
@@ -1284,7 +1284,7 @@ def process_batch_with_offtarget_check(rows_data, genome, genome_fasta_path, bat
                     'right_seq': best_pair['right_seq'],
                     'notes': ot_notes
                 })
-                print(f"  Row {row_idx+1:4d} ({gene_name:20s}): ✗ Could not extract sequence")
+                print(f"  Row {row_idx+1:4d} ({gene_name:20s}):  Could not extract sequence")
                 continue
             
             # Calculate ROI position
@@ -1420,7 +1420,7 @@ def process_batch_with_offtarget_check(rows_data, genome, genome_fasta_path, bat
                             batch_results.append((row_idx, result))
                             rescued = True
                             desperation_count += 1
-                            print(f"  Row {row_idx+1:4d} ({gene_name:20s}): ✓ Desperation rescued")
+                            print(f"  Row {row_idx+1:4d} ({gene_name:20s}):  Desperation rescued")
                             break
                     
                     if not rescued:
@@ -1440,7 +1440,7 @@ def process_batch_with_offtarget_check(rows_data, genome, genome_fasta_path, bat
                             'genotyping_primer_right_tm': best_pair['right_tm'],
                             'genotyping_primer_right_gc': best_pair['right_gc'],
                             'amplicon_size': best_pair['amplicon_size'],
-                            'genotyping_primers_notes': f'FAILED: Desperation primers had off-targets. {ot_notes}'
+                            'genotyping_primers_notes': f'FAILED: {ot_notes}'
                         }
                         batch_results.append((row_idx, result))
                         failure_details.append({
@@ -1450,7 +1450,7 @@ def process_batch_with_offtarget_check(rows_data, genome, genome_fasta_path, bat
                             'right_seq': best_pair['right_seq'],
                             'notes': ot_notes
                         })
-                        print(f"  Row {row_idx+1:4d} ({gene_name:20s}): ✗ Desperation primers had off-targets")
+                        print(f"  Row {row_idx+1:4d} ({gene_name:20s}): Desperation primers had off-targets")
                 
                 os.unlink(desp_fasta)
                 os.unlink(desp_psl)
@@ -1605,7 +1605,7 @@ def main():
             print("  Install BLAT or use --skip-offtarget-check to proceed without validation")
             print("  BLAT download: http://hgdownload.soe.ucsc.edu/admin/exe/")
             sys.exit(1)
-        print("✓ BLAT found")
+        print(" BLAT found")
     else:
         print("WARNING: Skipping off-target check (--skip-offtarget-check)")
     
@@ -1766,16 +1766,16 @@ def main():
         
         out = pd.concat([df, pd.DataFrame(save_results)], axis=1)
         out.to_csv(args.output, index=False)
-        print(f"✓ Saved to {args.output}")
+        print(f" Saved to {args.output}")
         
         # Save failure log incrementally if there are failures
-        if all_failures and not args.skip_offtarget_check:
-            failures_df = pd.DataFrame(all_failures)
+        if batch_failures and not args.skip_offtarget_check:
+            failures_df = pd.DataFrame(batch_failures)
             # Append to existing file, write header only if file doesn't exist
             write_header = not os.path.exists(args.failure_log)
             failures_df.to_csv(args.failure_log, mode='a', header=write_header, index=False)
-            print(f"✓ Updated failure log: {args.failure_log} ({len(all_failures)} failures)")
-        
+            print(f" Updated failure log: {args.failure_log} (+{len(batch_failures)} new failures)")  
+
         # Stats
         completed = [r for r in all_results if r is not None]
         success = sum(1 for r in completed 

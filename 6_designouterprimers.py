@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 Homology Arm Primer Design Pipeline - Step 3: Outer Primer Design
-
 Designs outer PCR primers (P1 and P4) that pair with inner primers to amplify
-complete homology arms for CRISPR knock-in repair templates. Uses Primer3 for
-optimal primer design with automatic off-target checking via BLAT.
+complete homology arms for CRISPR knock-in repair templates. Uses batched 
+processing with Primer3 for optimal primer design and single BLAT call for 
+off-target checking across all candidates.
 
 Input:
   - CSV file from script 5 containing inner primers (P2 and P3) with genomic
@@ -15,12 +15,12 @@ Input:
 Output:
   - CSV file with all input columns plus outer primer information:
       • primer_1_seq: Upstream outer primer (pairs with P2)
-      • primer_4_seq: Downstream outer primer (pairs with P4)
+      • primer_4_seq: Downstream outer primer (pairs with P3)
       • primer_1_locus, primer_4_locus: Genomic coordinates
       • primer_1_tm, primer_4_tm: Melting temperatures
       • primer_1_gc, primer_4_gc: GC content percentages
       • upstream_arm_length, downstream_arm_length: Final amplicon sizes
-      • Off-target descriptions
+      • Off-target annotations with rescue status
 
 Primer Nomenclature (Gene-centric):
   - P1 + P2 amplify gene UPSTREAM homology arm (500-1000bp target)
@@ -28,63 +28,85 @@ Primer Nomenclature (Gene-centric):
   For minus strand genes: gene upstream = genomic RIGHT side
   (Primer names always follow gene orientation, not genomic coordinates)
 
-Design Strategy:
-  1. Extract flanking sequences (up to e.g. 1kb each side of insertion)
-  2. Locate inner primers (P2, P3) within extracted sequences
-  3. Design outer primers (P1, P4) using Primer3:
-     - Target product size: 500-1000bp initially
-     - Optimal Tm and length tries to match P1/P2
-     - Prefentially chooses primer sequences with 3' GC-clamp
-  4. Verify primer uniqueness with BLAT (recommended)
-  5. Annotate off-target hits and categorize by location
-  6. Progressively falls back to target homology arms of up to 10kb if needed
+Batched Design Strategy:
+  1. Design ALL primer candidates for all rows at initial flank size
+     - Extracts flanking sequences around insertion sites
+     - Locates inner primers (P2, P3) within sequences
+     - Generates 50 P1 candidates and 50 P4 candidates per row (configurable)
+     - Target product size: 500-1000bp (configurable)
+     - Primers designed with Primer3 to match P2/P3 Tm when possible
+     - Preferentially selects primers with 3' GC-clamp
+  
+  2. Check ALL primers in one BLAT call
+     - Creates single FASTA with all P1 and P4 candidates
+     - Single BLAT run checks thousands of primers at once
+     - Parses results to identify clean primers (no off-targets)
+  
+  3. Select best primer pair for each row
+     - Prioritizes clean primers (no off-targets)
+     - Falls back to primers with acceptable off-targets if needed
+  
+  4. Progressive flank widening for failed rows (500bp increments)
+     - Rows with off-targets try wider flanks (up to 10kb)
+     - Independent rescue: P1 and P4 can succeed at different flank widths
+  
+  5. Fallback for remaining failures
+     - Uses best available primers even if off-targets remain
+     - Annotates with detailed off-target information
 
 Off-Target Detection (BLAT):
-  - Checks for primer binding elsewhere in genome
+  - Single batched BLAT call checks all primers simultaneously
   - Categories:
-    * same_chrom_near: Within 10kb of expected location (bad)
-    * same_chrom_far: Same chromosome, >10kb away (fine if an initial 
-     amplifcation of region is performed prior to using these primers)
-    * diff_chrom: Different chromosome
-  - Falls back to best available primer if all have off-targets
-  - Can be disabled with --skip-offtarget-check
+    * same_chrom_near: Within 10kb of expected location (concerning)
+    * same_chrom_far: Same chromosome, >10kb away (acceptable with pre-amplification)
+    * diff_chrom: Different chromosome (acceptable)
+  - Progressive rescue tries wider flanks before accepting off-targets
+  - Can be disabled with --skip-offtarget-check (not recommended)
 
 Required arguments:
-  --input PATH       Input CSV from script 5 with inner primers
-  --output PATH      Output CSV path with outer primers
-  --genome PATH      Genome FASTA file
+  --input PATH       Input CSV from script 5 with inner primers (P2, P3)
+  --output PATH      Output CSV path with outer primers (P1, P4)
+  --genome PATH      Genome FASTA file (e.g., ce11.fa for C. elegans)
 
 Optional arguments:
+  --batch-size N               Process N rows at a time (default: 100, all at once)
   --flush-every N              Write results every N rows for progress tracking (default: 10)
   --no-resume                  Overwrite output instead of resuming from checkpoint
-  --skip-offtarget-check       Skip off-target search using BLAT (much faster but less safe)
+  --skip-offtarget-check       Skip BLAT off-target check (faster but not recommended)
+  
+  Homology arm parameters:
   --min-arm N                  Minimum homology arm length in bp (default: 500)
-  --max-arm N                  Maximum homology arm length in bp (default: 1000)
+  --max-arm N                  Initial maximum arm length in bp (default: 1000)
+  --max-arm-fallback N         Maximum arm length for rescue attempts (default: 10000)
+  
+  Primer design parameters:
   --primer-min-size N          Minimum primer length in bp (default: 22)
   --primer-max-size N          Maximum primer length in bp (default: 36)
   --primer-min-tm N            Minimum primer Tm in °C (default: 50.0)
   --primer-max-tm N            Maximum primer Tm in °C (default: 72.0)
+  
+  BLAT parameters:
   --blat-min-identity N        Minimum % identity for BLAT hits (default: 90)
   --blat-min-score N           Minimum alignment score for BLAT (default: 20)
 
 Example:
-  python 6_designouterprimers.py \
+  python 6_designouterprimersbatch.py \
     --input 5.allwormguidesinternalprimers.csv \
     --output 6.allwormguidesbothprimers.csv \
-    --genome wbcel235/ce11.fa \
-    --flush-every 100
+    --genome ~/Desktop/wbcel235/ce11.fa \
+    --batch-size 100
 
-Recommended: install BLAT (for off-target checking)
-  - mkdir -p ~/bin # Create bin directory if it doesn't exist
+Recommended: Install BLAT for off-target checking
+  - mkdir -p ~/bin
   - cd ~/bin
-  - curl -o blat http://hgdownload.soe.ucsc.edu/admin/exe/macOSX.x86_64/blat/blat # Download BLAT
-  - chmod +x blat # Make it executable
-  - echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc # Add to PATH permanently
-  - blat # Test
+  - curl -o blat http://hgdownload.soe.ucsc.edu/admin/exe/macOSX.x86_64/blat/blat
+  - chmod +x blat
+  - echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+  - blat  # Test
+
 """
 
-
-import argparse, sys, os, subprocess, tempfile, traceback
+import argparse, sys, os, subprocess, tempfile, traceback, time
 import pandas as pd
 from collections import defaultdict
 
@@ -113,7 +135,7 @@ def load_genome(fasta_path):
         print(f"ERROR loading FASTA: {e}")
         sys.exit(1)
 
-def extract_flanks(genome, chrom, position, strand, flank, max_arm):
+def extract_flanks(genome, chrom, position, strand, flank):
     """
     Extract upstream and downstream flanking sequences based on gene strand
     
@@ -132,39 +154,32 @@ def extract_flanks(genome, chrom, position, strand, flank, max_arm):
     
     seq = genome[chrom]
     
+    # Safety margin needed because P2/P3 primer coordinates have edge case issues
+    # This causes Primer3 to find slightly different primers than without margin,
+    # but ensures all primers can be reliably found
+    safety_margin = 3
+    
     if strand == '+':
-        # Upstream (gene left): extract left, then RC
-        upstream_start = max(0, position - flank)
-        upstream_seq_forward = seq[upstream_start:position]
+        # Upstream (gene left): extract left with margin, then RC
+        upstream_start = max(0, position - flank - safety_margin)
+        upstream_seq_forward = seq[upstream_start:position + safety_margin]
         upstream_seq = rc(upstream_seq_forward)
         
-        # Downstream (gene right): extract right
-        downstream_start = position + 1
-        downstream_end = min(len(seq), position + flank)
+        # Downstream (gene right): extract right with margin
+        downstream_start = position + 1 - safety_margin
+        downstream_end = min(len(seq), position + flank + safety_margin)
         downstream_seq = seq[downstream_start:downstream_end]
         
-        print(f"  DEBUG extract_flanks (PLUS):")
-        print(f"    Upstream: genomic {upstream_start+1}-{position} (RC'd), seq len={len(upstream_seq)}")
-        print(f"    Downstream: genomic {downstream_start+1}-{downstream_end} (forward), seq len={len(downstream_seq)}")
-        print(f"    Upstream first 50bp: {upstream_seq[:50]}")
-        print(f"    Downstream first 50bp: {downstream_seq[:50]}")
-        
     else:  # strand == '-'
-        # Upstream (gene left, genomic right): extract right
-        upstream_start = position
-        upstream_end = min(len(seq), position + flank)
+        # Upstream (gene left, genomic right): extract right with margin
+        upstream_start = position - safety_margin
+        upstream_end = min(len(seq), position + flank + safety_margin)
         upstream_seq = seq[upstream_start:upstream_end]
         
-        # Downstream (gene right, genomic left): extract left, then RC
-        downstream_start = max(0, position - flank)
-        downstream_seq_forward = seq[downstream_start:position-1]
+        # Downstream (gene right, genomic left): extract left with margin, then RC
+        downstream_start = max(0, position - flank - safety_margin)
+        downstream_seq_forward = seq[downstream_start:position + safety_margin]
         downstream_seq = rc(downstream_seq_forward)
-        
-        print(f"  DEBUG extract_flanks (MINUS):")
-        print(f"    Upstream: genomic {upstream_start+1}-{upstream_end} (forward), seq len={len(upstream_seq)}")
-        print(f"    Downstream: genomic {downstream_start+1}-{position} (RC'd), seq len={len(downstream_seq)}")
-        print(f"    Upstream first 50bp: {upstream_seq[:50]}")
-        print(f"    Downstream first 50bp: {downstream_seq[:50]}")
     
     return upstream_seq, downstream_seq, upstream_start, downstream_start
 
@@ -176,66 +191,33 @@ def rc(seq):
     return ''.join([comp.get(b, b) for b in seq[::-1]])
 
 def find_primer_flexible(primer, seq, name="primer"):
-    """
-    Find primer in sequence, trying multiple strategies:
-    1. Exact match (forward)
-    2. Exact match (RC)
-    3. Fuzzy match (forward, up to 5 mismatches)
-    4. Fuzzy match (RC, up to 5 mismatches)
-    5. Truncated match at boundaries (handles primers extending beyond extraction)
-    
-    Returns: (position, length, orientation) or (None, None, None)
-    """
-    # Try exact forward
+    """Find primer in sequence, trying multiple strategies"""
+    # Fast path: exact match forward
     pos = seq.find(primer)
     if pos != -1:
         return pos, len(primer), 'forward'
     
-    # Try exact RC
+    # Fast path: exact match RC
     primer_rc = rc(primer)
     pos = seq.find(primer_rc)
     if pos != -1:
         return pos, len(primer_rc), 'RC'
     
-    # Try fuzzy forward
-    pos, mismatches = fuzzy_find(primer, seq, max_mismatches=5)
+    # SLOW: Only do fuzzy finding if exact matches failed
+    # This is expensive - scanning entire sequence position by position
+    pos = fuzzy_find(primer, seq, max_mismatches=5)
     if pos is not None:
-        print(f"    Note: {name} found with {mismatches} mismatches (forward)")
         return pos, len(primer), 'forward_fuzzy'
     
-    # Try fuzzy RC
-    pos, mismatches = fuzzy_find(primer_rc, seq, max_mismatches=5)
+    pos = fuzzy_find(primer_rc, seq, max_mismatches=5)
     if pos is not None:
-        print(f"    Note: {name} found with {mismatches} mismatches (RC)")
         return pos, len(primer_rc), 'RC_fuzzy'
     
-    # Try truncated at end (forward) - handles primers extending beyond boundary
+    # Try truncated matches at end
     for truncate in range(1, min(6, len(primer))):
         truncated = primer[:-truncate]
         if len(seq) >= len(truncated) and seq[-len(truncated):] == truncated:
-            print(f"    Note: {name} found truncated by {truncate}bp at sequence end (forward)")
             return len(seq) - len(truncated), len(truncated), 'forward_truncated'
-    
-    # Try truncated at end (RC)
-    for truncate in range(1, min(6, len(primer_rc))):
-        truncated = primer_rc[:-truncate]
-        if len(seq) >= len(truncated) and seq[-len(truncated):] == truncated:
-            print(f"    Note: {name} found truncated by {truncate}bp at sequence end (RC)")
-            return len(seq) - len(truncated), len(truncated), 'RC_truncated'
-    
-    # Try truncated at start (forward)
-    for truncate in range(1, min(6, len(primer))):
-        truncated = primer[truncate:]
-        if seq[:len(truncated)] == truncated:
-            print(f"    Note: {name} found truncated by {truncate}bp at sequence start (forward)")
-            return 0, len(truncated), 'forward_truncated'
-    
-    # Try truncated at start (RC)
-    for truncate in range(1, min(6, len(primer_rc))):
-        truncated = primer_rc[truncate:]
-        if seq[:len(truncated)] == truncated:
-            print(f"    Note: {name} found truncated by {truncate}bp at sequence start (RC)")
-            return 0, len(truncated), 'RC_truncated'
     
     return None, None, None
 
@@ -243,21 +225,36 @@ def fuzzy_find(primer, seq, max_mismatches=5):
     """Find primer allowing up to max_mismatches mismatches"""
     best_pos = None
     best_mismatches = max_mismatches + 1
+    primer_len = len(primer)
+    seq_len = len(seq)
     
-    for i in range(len(seq) - len(primer) + 1):
-        mismatches = sum(1 for j in range(len(primer)) if seq[i+j] != primer[j])
+    # Early termination if we find a perfect or near-perfect match
+    for i in range(seq_len - primer_len + 1):
+        mismatches = 0
+        # Count mismatches with early exit
+        for j in range(primer_len):
+            if seq[i+j] != primer[j]:
+                mismatches += 1
+                # Early exit if too many mismatches already
+                if mismatches > max_mismatches:
+                    break
+        
         if mismatches < best_mismatches:
             best_mismatches = mismatches
             best_pos = i
+            # Perfect match found - stop searching
             if mismatches == 0:
+                break
+            # Very good match - stop searching
+            if mismatches <= 1:
                 break
     
     if best_mismatches <= max_mismatches:
-        return best_pos, best_mismatches
+        return best_pos
     return None, None
 
 def parse_blat_psl(psl_path):
-    """Parse BLAT PSL - simplified version"""
+    """Parse BLAT PSL output"""
     hits = defaultdict(list)
     if not os.path.exists(psl_path):
         return hits
@@ -292,91 +289,56 @@ def parse_blat_psl(psl_path):
                 continue
     return hits
 
-def check_offtargets_categorized(hits, primer_id, expected_chrom, expected_start, expected_end, cut_position, tolerance=5):
-    """Categorize off-targets by location"""
-    if primer_id not in hits:
-        return 'clean', 0, "No hits"
-    
-    good_hits = [h for h in hits[primer_id] if h['identity'] >= 90 and h['score'] >= 18]
-    if not good_hits:
-        return 'clean', 0, "No quality hits"
-    
-    offtargets = []
-    for hit in good_hits:
-        is_expected = (hit['chrom'] == expected_chrom and 
-                      abs(hit['start'] - expected_start) <= tolerance and 
-                      abs(hit['end'] - expected_end) <= tolerance)
-        if not is_expected:
-            offtargets.append(hit)
-    
-    if not offtargets:
-        return 'clean', 0, "Only on-target"
-    
-    # Categorize
-    other_chrom = [h for h in offtargets if h['chrom'] != expected_chrom]
-    if other_chrom:
-        return 'other_chrom', len(other_chrom), f"{len(other_chrom)} hits on other chromosomes"
-    
-    same_chrom_far = [h for h in offtargets if abs(h['start'] - cut_position) > 10000]
-    if same_chrom_far:
-        return 'same_chrom', len(same_chrom_far), f"{len(same_chrom_far)} hits >10kb away"
-    
-    return 'near_position', len(offtargets), f"{len(offtargets)} hits within 10kb"
-
-# prefer primers that end in G or C at the 3' end
 def _gc_end_pref(seq):
+    """Prefer primers that end in G or C at the 3' end"""
     return 0 if seq[-1].upper() in ("G","C") else 1
 
-def design_outer_primer_for_p1p2_arm(seq, p2_primer, seq_start, strand, cut_position, args, num_return=50):
-    """
-    Design P1 candidates to pair with P2 for gene upstream (P1+P2) homology arm
-    Returns list of primer candidates, best first
-    """
-    print(f"  Searching for P2...")
+def design_outer_primer_for_p1p2_arm(seq, p2_primer, seq_start, strand, cut_position, args, target_arm_size, num_return=50, debug=False, safety_margin=3):
+    """Design P1 candidates to pair with P2 for gene upstream (P1+P2) homology arm
     
-    # Calculate P2 Tm and constraints
+    Args:
+        safety_margin: Number of bases added to extraction for tolerance (default 3)
+    
+    Returns: (candidates_list, error_message)
+        - candidates_list: list of primer dicts (empty if failed)
+        - error_message: None if success, string if failed
+    """
     p2_tm_result = primer3.calc_tm(p2_primer)
     p2_len = len(p2_primer)
-    print(f"    P2 length: {p2_len}bp, Tm: {p2_tm_result:.1f}°C")
     
-    # Constrain P1 size to match P2 within allowed range
     p1_min_size = args.primer_min_size
     p1_max_size = args.primer_max_size
     p1_opt_size = max(args.primer_min_size, min(args.primer_max_size, p2_len))
     
-    # Constrain P1 Tm to match P2, with clamping to allowed range
     p1_opt_tm = p2_tm_result
     p1_min_tm = args.primer_min_tm
     p1_max_tm = args.primer_max_tm
     
-    # Clamp optimal Tm to be within allowed range
     if p2_tm_result < args.primer_min_tm:
         p1_opt_tm = args.primer_min_tm
     elif p2_tm_result > args.primer_max_tm:
         p1_opt_tm = args.primer_max_tm
     
-    # Ensure min < opt < max (primer3 requirement)
     if p1_min_tm >= p1_opt_tm:
         p1_min_tm = p1_opt_tm - 1.0
     if p1_max_tm <= p1_opt_tm:
         p1_max_tm = p1_opt_tm + 1.0
     
-    print(f"    P1 constraints: {p1_min_size}-{p1_max_size}bp, Tm: {p1_min_tm:.1f}-{p1_max_tm:.1f}°C (opt: {p1_opt_tm:.1f})")
-    
-    # Find P2 in sequence
     p2_pos, p2_len_found, p2_orientation = find_primer_flexible(p2_primer, seq, "P2")
     
     if p2_pos is None:
-        print(f"    ✗ P2 not found in sequence")
-        return []
+        if debug:
+            print(f"      P2 NOT FOUND in upstream sequence")
+            print(f"      P2 primer: {p2_primer}")
+            print(f"      Tried forward, RC, fuzzy, and truncated matches")
+        return [], "P2 not found in upstream sequence"
     
-    p2_end = p2_pos + p2_len_found
-    print(f"    ✓ P2 found at {p2_pos}-{p2_end} ({p2_orientation})")
+    if debug:
+        print(f"      P2 found at position {p2_pos} ({p2_orientation})")
     
-    # Design P1 candidates
     try:
-        search_end = min(len(seq), p2_pos + args.max_arm)
-        search_start = search_end - 500
+        search_end = len(seq)
+        search_start = max(0, search_end - 500)
         
         p3_args_custom = {
             'PRIMER_MIN_SIZE': p1_min_size,
@@ -385,9 +347,9 @@ def design_outer_primer_for_p1p2_arm(seq, p2_primer, seq_start, strand, cut_posi
             'PRIMER_MIN_TM': p1_min_tm,
             'PRIMER_MAX_TM': p1_max_tm,
             'PRIMER_OPT_TM': p1_opt_tm,
-            'PRIMER_MIN_GC': 40.0,
-            'PRIMER_MAX_GC': 60.0,
-            'PRIMER_PRODUCT_SIZE_RANGE': [[args.min_arm, args.max_arm]],
+            'PRIMER_MIN_GC': 40.0,  
+            'PRIMER_MAX_GC': 60.0,  
+            'PRIMER_PRODUCT_SIZE_RANGE': [[args.min_arm, target_arm_size]],
             'PRIMER_NUM_RETURN': num_return,
         }
         
@@ -401,9 +363,8 @@ def design_outer_primer_for_p1p2_arm(seq, p2_primer, seq_start, strand, cut_posi
         
         num_returned = res.get('PRIMER_RIGHT_NUM_RETURNED', 0)
         if num_returned == 0:
-            return []
+            return [], "Primer3 found no valid P1 primers"
         
-        # Extract all candidates
         candidates = []
         for i in range(num_returned):
             try:
@@ -413,11 +374,14 @@ def design_outer_primer_for_p1p2_arm(seq, p2_primer, seq_start, strand, cut_posi
                 tm = res[f'PRIMER_RIGHT_{i}_TM']
                 gc = res[f'PRIMER_RIGHT_{i}_GC_PERCENT']
                 
-                # Calculate genomic coordinates
                 if strand == '+':
-                    p1_start_genomic = cut_position - start
-                    p1_end_genomic = cut_position - (start - length + 1)
+                    # Plus strand uses cut_position directly
+                    # Adjust start to account for safety margin in extraction
+                    adjusted_start = start - safety_margin
+                    p1_start_genomic = cut_position - adjusted_start
+                    p1_end_genomic = cut_position - (adjusted_start - length + 1)
                 else:
+                    # Minus strand uses seq_start directly (already includes margin)
                     p1_start_genomic = seq_start + (start - length + 1) + 1
                     p1_end_genomic = seq_start + start + 1
                 
@@ -432,75 +396,59 @@ def design_outer_primer_for_p1p2_arm(seq, p2_primer, seq_start, strand, cut_posi
             except KeyError:
                 continue
         
-        return candidates
+        return candidates, None
         
     except Exception as e:
-        return {
-            'primer_1_seq': 'ERROR',
-            'primer_1_start': None,
-            'primer_1_end': None,
-            'primer_1_tm': None,
-            'primer_1_gc': None,
-            'primer_1_notes': f'Exception: {str(e)}'
-        }
+        return [], f"Primer3 exception: {str(e)}"
 
-def design_outer_primer_for_p3p4_arm(seq, p3_primer, seq_start, strand, cut_position, args, num_return=50):
-    """
-    Design P4 candidates to pair with P3 for gene downstream (P3+P4) homology arm
-    Constrains P4 to match P3's length and Tm within allowed ranges
-    Returns list of primer candidates, best first
-    """
-    print(f"  Searching for P3...")
+def design_outer_primer_for_p3p4_arm(seq, p3_primer, seq_start, strand, cut_position, args, target_arm_size, num_return=50, debug=False, safety_margin=3):
+    """Design P4 candidates to pair with P3 for gene downstream (P3+P4) homology arm
     
-    # Calculate P3's Tm using Primer3
+    Args:
+        safety_margin: Number of bases added to extraction for tolerance (default 3)
+    
+    Returns: (candidates_list, error_message)
+        - candidates_list: list of primer dicts (empty if failed)
+        - error_message: None if success, string if failed
+    """
     p3_tm_result = primer3.calc_tm(p3_primer)
     p3_len = len(p3_primer)
-    print(f"    P3 length: {p3_len}bp, Tm: {p3_tm_result:.1f}°C")
     
-    # Constrain P4 size to match P3 within allowed range
     p4_min_size = args.primer_min_size
     p4_max_size = args.primer_max_size
     p4_opt_size = max(args.primer_min_size, min(args.primer_max_size, p3_len))
     
-    # Constrain P4 Tm to match P3, with clamping to allowed range
     p4_opt_tm = p3_tm_result
     p4_min_tm = args.primer_min_tm
     p4_max_tm = args.primer_max_tm
     
-    # Clamp optimal Tm to be within allowed range
     if p3_tm_result < args.primer_min_tm:
         p4_opt_tm = args.primer_min_tm
     elif p3_tm_result > args.primer_max_tm:
         p4_opt_tm = args.primer_max_tm
     
-    # Ensure min < opt < max (primer3 requirement)
     if p4_min_tm >= p4_opt_tm:
         p4_min_tm = p4_opt_tm - 1.0
     if p4_max_tm <= p4_opt_tm:
         p4_max_tm = p4_opt_tm + 1.0
     
-    print(f"    P4 constraints: {p4_min_size}-{p4_max_size}bp, Tm: {p4_min_tm:.1f}-{p4_max_tm:.1f}°C (opt: {p4_opt_tm:.1f})")
-    
-    # Find P3 in sequence
     p3_pos, p3_len_found, p3_orientation = find_primer_flexible(p3_primer, seq, "P3")
     if p3_pos is None:
-        print(f"    ✗ P3 not found in sequence (length: {len(seq)}bp)")
-        print(f"    P3 sequence: {p3_primer}")
-        print(f"    First 100bp of seq: {seq[:100]}")
-        return []
+        if debug:
+            print(f"      P3 NOT FOUND in downstream sequence")
+            print(f"      P3 primer: {p3_primer}")
+            print(f"      Tried forward, RC, fuzzy, and truncated matches")
+        return [], "P3 not found in downstream sequence"
     
-    p3_end = p3_pos + p3_len_found
-    print(f"    ✓ P3 found at {p3_pos}-{p3_end} ({p3_orientation})")
+    if debug:
+        print(f"      P3 found at position {p3_pos} ({p3_orientation})")
     
-    # Design P4 to pair with P3
     try:
-        search_end = min(len(seq), p3_pos + args.max_arm)
-        search_start = search_end - 500
+        search_end = len(seq)
+        search_start = max(0, search_end - 500)
         
         if search_end <= search_start:
-            return []
-        
-        print(f"    Searching for P4 in region {search_start}-{search_end} (product target: {args.min_arm}-{args.max_arm}bp)")
+            return [], "Downstream sequence too short"
         
         p3_args_custom = {
             'PRIMER_MIN_SIZE': p4_min_size,
@@ -511,7 +459,7 @@ def design_outer_primer_for_p3p4_arm(seq, p3_primer, seq_start, strand, cut_posi
             'PRIMER_OPT_TM': p4_opt_tm,
             'PRIMER_MIN_GC': 40.0,
             'PRIMER_MAX_GC': 60.0,
-            'PRIMER_PRODUCT_SIZE_RANGE': [[args.min_arm, args.max_arm]],
+            'PRIMER_PRODUCT_SIZE_RANGE': [[args.min_arm, target_arm_size]],
             'PRIMER_NUM_RETURN': num_return,
         }
         
@@ -525,9 +473,8 @@ def design_outer_primer_for_p3p4_arm(seq, p3_primer, seq_start, strand, cut_posi
 
         num_returned = res.get('PRIMER_RIGHT_NUM_RETURNED', 0)
         if num_returned == 0:
-            return []
+            return [], "Primer3 found no valid P4 primers"
         
-        # Extract all candidates
         candidates = []
         for i in range(num_returned):
             try:
@@ -537,13 +484,16 @@ def design_outer_primer_for_p3p4_arm(seq, p3_primer, seq_start, strand, cut_posi
                 tm = res[f'PRIMER_RIGHT_{i}_TM']
                 gc = res[f'PRIMER_RIGHT_{i}_GC_PERCENT']
 
-                # Calculate genomic coordinates
                 if strand == '+':
+                    # Plus strand uses seq_start directly (already includes margin)
                     p4_start_genomic = seq_start + (start - length + 1) + 1
                     p4_end_genomic = seq_start + start + 1
                 else:
-                    p4_end_genomic = cut_position - (start - length + 1)
-                    p4_start_genomic = cut_position - start
+                    # Minus strand uses cut_position directly
+                    # Adjust start to account for safety margin in extraction
+                    adjusted_start = start - safety_margin
+                    p4_end_genomic = cut_position - (adjusted_start - length + 1)
+                    p4_start_genomic = cut_position - adjusted_start
                 
                 candidates.append({
                     'primer_4_seq': seq_p4,
@@ -556,23 +506,13 @@ def design_outer_primer_for_p3p4_arm(seq, p3_primer, seq_start, strand, cut_posi
             except KeyError:
                 continue
         
-        return candidates
+        return candidates, None
         
     except Exception as e:
-        return {
-            'primer_4_seq': 'ERROR',
-            'primer_4_start': None,
-            'primer_4_end': None,
-            'primer_4_tm': None,
-            'primer_4_gc': None,
-            'primer_4_notes': f'Exception: {str(e)}'
-        }
+        return [], f"Primer3 exception: {str(e)}"
 
 def parse_locus_coords(locus_str):
-    """
-    Parse locus string like 'I:5107814-5107843 (-)' to get start and end coordinates.
-    Returns (start, end) as integers, or (None, None) if parsing fails.
-    """
+    """Parse locus string like 'I:5107814-5107843 (-)' to get start and end coordinates"""
     try:
         if not locus_str or pd.isna(locus_str):
             return None, None
@@ -585,411 +525,983 @@ def parse_locus_coords(locus_str):
     except:
         return None, None
 
-def process(row, n, genome, args, genome_fasta_path=None):
-    """
-    Process one row - design P1 and P4
-    
-    Primer names follow GENE coordinates:
-    - P1+P2 = gene upstream arm
-    - P3+P4 = gene downstream arm
-    
-    For minus strand: gene upstream = genomic RIGHT
-    """
-    print(f"\n{'='*70}")
-    print(f"Row {n}: {row.get('gene', '?')} ({row.get('site_type', '?')})")
-    print(f"{'='*70}")
-    
-    # Get fields
-    chrom = row.get('chrom', '')
-    position = row.get('pos', None)
-    p2 = row.get('primer_2_seq_genomic', '').upper()
-    p3 = row.get('primer_3_seq_genomic', '').upper()
-    strand = row.get('strand', '+')
-    
-    # Get P2 and P3 coordinates from locus strings
-    p2_locus = row.get('primer_2_locus', '')
-    p3_locus = row.get('primer_3_locus', '')
-    p2_start, p2_end = parse_locus_coords(p2_locus)
-    p3_start, p3_end = parse_locus_coords(p3_locus)
+def get_gene_name(row, row_idx):
+    """Safely extract gene name from row"""
+    gene = row.get('gene')
+    if gene is None or (isinstance(gene, float) and pd.isna(gene)):
+        return f'row{row_idx+1}'
+    return str(gene)
 
-    print(f"  P2 from CSV: {p2}")
-    print(f"  P2 locus: {p2_locus} → coords: {p2_start}-{p2_end}")
-    print(f"  P3 from CSV: {p3}")
-    print(f"  P3 locus: {p3_locus} → coords: {p3_start}-{p3_end}")
-    
-    # Validation
-    if not chrom or position is None or not p2 or not p3:
-        missing = []
-        if not chrom: missing.append('chrom')
-        if position is None: missing.append('pos')
-        if not p2: missing.append('primer_2_seq_genomic')
-        if not p3: missing.append('primer_3_seq_genomic')
-        err = f"Missing: {', '.join(missing)}"
-        return {
-            'primer_1_seq': 'ERROR', 'primer_1_locus': None,
-            'primer_1_tm': None, 'primer_1_gc': None, 'upstream_arm_length': None,
-            'primer_1_notes': err,
-            'primer_4_seq': 'ERROR', 'primer_4_locus': None,
-            'primer_4_tm': None, 'primer_4_gc': None, 'downstream_arm_length': None,
-            'primer_4_notes': err
-        }
+def run_blat_batch(primer_fasta_path, genome_fasta_path, output_psl_path, min_identity, min_score):
+    """Run BLAT to search primers against genome"""
+    cmd = [
+        'blat',
+        genome_fasta_path,
+        primer_fasta_path,
+        output_psl_path,
+        '-stepSize=5',
+        '-repMatch=1000000',
+        f'-minScore={min_score}',
+        f'-minIdentity={min_identity}',
+        # Removed -minMatch=1 for better performance (uses BLAT default)
+    ]
     
     try:
-        position = int(position)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        return result.returncode == 0
     except:
-        err = f'Invalid position: {position}'
-        return {
-            'primer_1_seq': 'ERROR', 'primer_1_notes': err,
-            'primer_4_seq': 'ERROR', 'primer_4_notes': err
-        }
-    
-    # Extract genomic flanks
-    upstream_seq, downstream_seq, upstream_start, downstream_start = extract_flanks(
-        genome, chrom, position, strand, args.max_arm, args.max_arm
-    )
-    if upstream_seq is None:
-        err = f'Chromosome {chrom} not found'
-        return {
-            'primer_1_seq': 'ERROR', 'primer_1_notes': err,
-            'primer_4_seq': 'ERROR', 'primer_4_notes': err
-        }
-    
-    print(f"Chr {chrom}:{position} (strand {strand})")
-    print(f"Upstream arm (P1+P2): {len(upstream_seq)}bp")
-    print(f"Downstream arm (P3+P4): {len(downstream_seq)}bp")
-    
-    # P1+P2 always use upstream, P3+P4 always use downstream
-    p1p2_seq, p1p2_start = upstream_seq, upstream_start
-    p3p4_seq, p3p4_start = downstream_seq, downstream_start
-    
-    # Design primers with retry logic and off-target checking
-    print(f"\nDesigning P1 (pairs with P2):")
-    r1 = None
-    best_fallback_diff_chrom = None
-    best_fallback_same_chrom = None
-    best_fallback_near = None
-    total_p1_tested = 0
-    total_p1_clean = 0
-    total_p1_offtargets = 0
-    
-    # Try all arm sizes from max_arm to max_arm_fallback
-    for attempt_arm_size in range(args.max_arm, args.max_arm_fallback + 1, 500):
-        if attempt_arm_size > args.max_arm:
-            print(f"  Retry with MAX_ARM={attempt_arm_size}bp...")
-            flanks = extract_flanks(genome, chrom, position, strand, attempt_arm_size + 100, attempt_arm_size)
-            p1p2_seq, p1p2_start = flanks[0], flanks[2]  # upstream
+        return False
 
-        candidates = design_outer_primer_for_p1p2_arm(p1p2_seq, p2, p1p2_start, strand, position, args, num_return=50)
+def categorize_offtargets(offtarget_hits, expected_chrom, cut_position):
+    """Categorize off-targets by location"""
+    if not offtarget_hits:
+        return None, 0, None
+    
+    other_chrom = [h for h in offtarget_hits if h['chrom'] != expected_chrom]
+    same_chrom_far = [h for h in offtarget_hits if h['chrom'] == expected_chrom and abs(h['start'] - cut_position) > 10000]
+    same_chrom_near = [h for h in offtarget_hits if h['chrom'] == expected_chrom and abs(h['start'] - cut_position) <= 10000]
+    
+    if same_chrom_near:
+        return 'same_chrom_near', len(same_chrom_near), f'{len(same_chrom_near)} hits within 10kb'
+    elif same_chrom_far:
+        return 'same_chrom_far', len(same_chrom_far), f'{len(same_chrom_far)} hits >10kb away'
+    elif other_chrom:
+        return 'diff_chrom', len(other_chrom), f'{len(other_chrom)} hits on other chromosomes'
+    else:
+        return 'unknown', len(offtarget_hits), f'{len(offtarget_hits)} unclassified hits'
+
+def check_offtargets(hits, primer_id, expected_chrom, expected_start, expected_end, cut_position, args, tolerance=5):
+    """Check if a primer has off-target hits"""
+    if primer_id not in hits:
+        return False, 0, "No hits", None
+    
+    good_hits = [h for h in hits[primer_id] 
+                 if h['identity'] >= args.blat_min_identity and h['score'] >= args.blat_min_score]
+    
+    if not good_hits:
+        return False, 0, "No quality hits", None
+    
+    offtargets = []
+    for hit in good_hits:
+        is_expected = (hit['chrom'] == expected_chrom and 
+                      abs(hit['start'] - expected_start) <= tolerance and 
+                      abs(hit['end'] - expected_end) <= tolerance)
+        if not is_expected:
+            offtargets.append(hit)
+    
+    if not offtargets:
+        return False, 0, "Only on-target", None
+    
+    category, count, description = categorize_offtargets(offtargets, expected_chrom, cut_position)
+    return True, count, description, category
+
+def create_result_from_candidates(p1_cand, p4_cand, chrom, strand, p2_start, p2_end, p3_start, p3_end, p1_notes, p4_notes):
+    """Create result dict from selected candidates"""
+    upstream_arm_length = None
+    downstream_arm_length = None
+    
+    if (p1_cand['primer_1_start'] is not None and p1_cand['primer_1_end'] is not None 
+        and p2_start is not None and p2_end is not None):
+        leftmost = min(p1_cand['primer_1_start'], p2_start)
+        rightmost = max(p1_cand['primer_1_end'], p2_end)
+        upstream_arm_length = rightmost - leftmost + 1
+    
+    if (p4_cand['primer_4_start'] is not None and p4_cand['primer_4_end'] is not None 
+        and p3_start is not None and p3_end is not None):
+        leftmost = min(p4_cand['primer_4_start'], p3_start)
+        rightmost = max(p4_cand['primer_4_end'], p3_end)
+        downstream_arm_length = rightmost - leftmost + (2 if strand == '-' else 1)
+    
+    p1_locus = None
+    p4_locus = None
+    
+    if p1_cand['primer_1_start'] is not None and p1_cand['primer_1_end'] is not None:
+        p1_locus = f"{chrom}:{p1_cand['primer_1_start']}-{p1_cand['primer_1_end']} ({strand})"
+    
+    if p4_cand['primer_4_start'] is not None and p4_cand['primer_4_end'] is not None:
+        opposite_strand = '-' if strand == '+' else '+'
+        p4_locus = f"{chrom}:{p4_cand['primer_4_start']}-{p4_cand['primer_4_end']} ({opposite_strand})"
+    
+    return {
+        'primer_1_seq': p1_cand['primer_1_seq'],
+        'primer_1_locus': p1_locus,
+        'primer_1_tm': p1_cand['primer_1_tm'],
+        'primer_1_gc': p1_cand['primer_1_gc'],
+        'upstream_arm_length': upstream_arm_length,
+        'primer_1_notes': p1_notes,
+        'primer_4_seq': p4_cand['primer_4_seq'],
+        'primer_4_locus': p4_locus,
+        'primer_4_tm': p4_cand['primer_4_tm'],
+        'primer_4_gc': p4_cand['primer_4_gc'],
+        'downstream_arm_length': downstream_arm_length,
+        'primer_4_notes': p4_notes
+    }
+
+def process_batch(batch_rows, genome, genome_fasta_path, batch_start_idx, args):
+    """
+    OPTIMIZED: Process a batch of rows by designing ALL primers first,
+    then running ONE BLAT call for everything.
+    
+    Includes progressive flank widening: tries initial flank, then increases
+    by 500bp increments up to max_arm_fallback if no clean primers found.
+    """
+    print(f"\n{'='*70}")
+    print(f"BATCH: Processing rows {batch_start_idx+1} to {batch_start_idx+len(batch_rows)}")
+    print(f"{'='*70}")
+    
+    batch_results = []
+    
+    # Step 1: Design ALL primer candidates for all rows at initial flank size
+    import time
+    step1_start = time.time()
+    print(f"\nStep 1: Designing primers for {len(batch_rows)} rows at {args.max_arm}bp flank...")
+    
+    primer_designs = []
+    errors = []
+    
+    primer3_time = 0
+    extraction_time = 0
+    
+    for idx, (row_idx, row) in enumerate(batch_rows):
+        if (idx + 1) % 10 == 0 or idx == 0:
+            elapsed = time.time() - step1_start
+            rate = (idx + 1) / elapsed if elapsed > 0 else 0
+            print(f"  Progress: {idx + 1}/{len(batch_rows)} rows ({rate:.1f} rows/sec, {elapsed:.1f}s elapsed)...", end='\r')
         
-        # Sort by GC end preference, then score
-        for c in candidates:
-            c['_sort_score'] = c.get('score', 0)
-        candidates.sort(key=lambda c: (_gc_end_pref(c['primer_1_seq']), -c['_sort_score']))
-        for c in candidates:
-            c.pop('_sort_score', None)
+        chrom = row.get('chrom', '')
+        position = row.get('pos', None)
         
-        if not candidates:
+        # Handle NaN values in primer sequences
+        p2_raw = row.get('primer_2_seq_genomic', '')
+        p3_raw = row.get('primer_3_seq_genomic', '')
+        p2 = str(p2_raw).upper() if pd.notna(p2_raw) else ''
+        p3 = str(p3_raw).upper() if pd.notna(p3_raw) else ''
+        
+        strand = row.get('strand', '+')
+        p2_locus = row.get('primer_2_locus', '')
+        p3_locus = row.get('primer_3_locus', '')
+        
+        gene_name = get_gene_name(row, row_idx)
+        
+        # Debug: print first row details
+        if idx == 0:
+            print(f"\n  DEBUG first row (row {row_idx+1}, {gene_name}):")
+            print(f"    chrom: '{chrom}' (empty={not chrom})")
+            print(f"    position: {position} (None={position is None})")
+            print(f"    strand: {strand}")
+            print(f"    p2_raw: {p2_raw} (type: {type(p2_raw).__name__})")
+            print(f"    p3_raw: {p3_raw} (type: {type(p3_raw).__name__})")
+            print(f"    p2: '{p2[:20] if p2 else ''}...' (empty={not p2})")
+            print(f"    p3: '{p3[:20] if p3 else ''}...' (empty={not p3})")
+            
+            # Check if there's a primer_2_seq column (template seq vs genomic seq)
+            p2_template = row.get('primer_2_seq', '')
+            p3_template = row.get('primer_3_seq', '')
+            print(f"    primer_2_seq (template): {p2_template[:30] if p2_template and pd.notna(p2_template) else 'N/A'}...")
+            print(f"    primer_3_seq (template): {p3_template[:30] if p3_template and pd.notna(p3_template) else 'N/A'}...")
+            print(f"    primer_2_locus: {p2_locus}")
+            print(f"    primer_3_locus: {p3_locus}")
+        
+        # Skip rows without inner primers
+        if not p2 or not p3:
+            # Don't add to errors or results - just skip silently
             continue
         
-        print(f"    Testing {len(candidates)} P1 candidates...")
+        if not chrom or position is None:
+            missing = []
+            if not chrom: missing.append('chrom')
+            if position is None: missing.append('pos')
+            errors.append(f"Row {row_idx+1} ({gene_name}): Missing required fields: {', '.join(missing)}")
+            result = {
+                'primer_1_seq': 'ERROR', 'primer_1_locus': None,
+                'primer_1_tm': None, 'primer_1_gc': None, 'upstream_arm_length': None,
+                'primer_1_notes': 'Missing required fields',
+                'primer_4_seq': 'ERROR', 'primer_4_locus': None,
+                'primer_4_tm': None, 'primer_4_gc': None, 'downstream_arm_length': None,
+                'primer_4_notes': 'Missing required fields'
+            }
+            batch_results.append((row_idx, result))
+            continue
         
-        if genome_fasta_path:
-            # Batch BLAT search for all candidates
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False) as f:
-                batch_fasta = f.name
-                for idx, candidate in enumerate(candidates):
-                    f.write(f">P1_row{n}_cand{idx}\n{candidate['primer_1_seq']}\n")
+        try:
+            position = int(position)
+        except:
+            errors.append(f"Row {row_idx+1} ({gene_name}): Invalid position")
+            result = {
+                'primer_1_seq': 'ERROR', 'primer_1_locus': None,
+                'primer_1_tm': None, 'primer_1_gc': None, 'upstream_arm_length': None,
+                'primer_1_notes': 'Invalid position',
+                'primer_4_seq': 'ERROR', 'primer_4_locus': None,
+                'primer_4_tm': None, 'primer_4_gc': None, 'downstream_arm_length': None,
+                'primer_4_notes': 'Invalid position'
+            }
+            batch_results.append((row_idx, result))
+            continue
+        
+        # DEBUG: Print detailed info for first row
+        if idx == 0:
+            print(f"\n  === DEBUG ROW {row_idx+1} ({gene_name}) ===")
+            print(f"    CSV position: {position} (type: {type(position)})")
+            print(f"    Strand: {strand}")
+            print(f"    P2 locus: {p2_locus}")
+            print(f"    P3 locus: {p3_locus}")
+            print(f"    P2 seq: {p2[:20]}...")
+            print(f"    P3 seq: {p3[:20]}...")
+        
+        ext_start = time.time()
+        upstream_seq, downstream_seq, upstream_start, downstream_start = extract_flanks(
+            genome, chrom, position, strand, args.max_arm
+        )
+        extraction_time += time.time() - ext_start
+        
+        if idx == 0:
+            print(f"    After extract_flanks:")
+            print(f"      upstream_start={upstream_start}, len={len(upstream_seq) if upstream_seq else 0}")
+            print(f"      downstream_start={downstream_start}, len={len(downstream_seq) if downstream_seq else 0}")
+            if upstream_seq:
+                print(f"      Upstream first 30bp: {upstream_seq[:30]}")
+            if downstream_seq:
+                print(f"      Downstream first 30bp: {downstream_seq[:30]}")
+        
+        if upstream_seq is None:
+            errors.append(f"Row {row_idx+1} ({gene_name}): Chromosome not found")
+            result = {
+                'primer_1_seq': 'ERROR', 'primer_1_locus': None,
+                'primer_1_tm': None, 'primer_1_gc': None, 'upstream_arm_length': None,
+                'primer_1_notes': 'Chromosome not found',
+                'primer_4_seq': 'ERROR', 'primer_4_locus': None,
+                'primer_4_tm': None, 'primer_4_gc': None, 'downstream_arm_length': None,
+                'primer_4_notes': 'Chromosome not found'
+            }
+            batch_results.append((row_idx, result))
+            continue
+        
+        # Debug: print sequence lengths for first row
+        if idx == 0:
+            print(f"    upstream_seq length: {len(upstream_seq)}bp")
+            print(f"    upstream_seq first 50bp: {upstream_seq[:50]}")
+            print(f"    upstream_seq last 50bp: {upstream_seq[-50:]}")
+            print(f"    downstream_seq length: {len(downstream_seq)}bp")
+            print(f"    downstream_seq first 50bp: {downstream_seq[:50]}")
+            print(f"    downstream_seq last 50bp: {downstream_seq[-50:]}")
             
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.psl', delete=False) as f:
-                batch_psl = f.name
-            
-            # Run BLAT once for all candidates
-            cmd = ['blat', genome_fasta_path, batch_fasta, batch_psl, '-stepSize=5', 
-                   '-repMatch=1000000', f'-minScore={args.blat_min_score}', 
-                   f'-minIdentity={args.blat_min_identity}', '-minMatch=1']
-            result = subprocess.run(cmd, capture_output=True, timeout=300)
-            
-            if result.returncode == 0:
-                all_hits = parse_blat_psl(batch_psl)
+            # Try to find P2 in the genomic region manually
+            print(f"    Checking P2 manually:")
+            if p2 in upstream_seq:
+                pos = upstream_seq.find(p2)
+                print(f"      P2 found FORWARD at position {pos} in upstream")
+            elif rc(p2) in upstream_seq:
+                pos = upstream_seq.find(rc(p2))
+                print(f"      P2 found RC at position {pos} in upstream")
+            else:
+                # Check if it's just at the boundary
+                if upstream_seq.startswith(p2[1:]):
+                    print(f"      P2 missing first base - found from position 1: {upstream_seq[:len(p2)]}")
+                else:
+                    print(f"      P2 NOT found in upstream at all")
                 
-                for idx, candidate in enumerate(candidates):
-                    total_p1_tested += 1
-                    primer_id = f"P1_row{n}_cand{idx}"
-                    
-                    offtarget_hits = []
-                    if primer_id in all_hits:
-                        for hit in all_hits[primer_id][:5]:
-                            if hit['identity'] >= args.blat_min_identity and hit['score'] >= args.blat_min_score:
-                                is_expected = (hit['chrom'] == chrom and 
-                                             abs(hit['start'] - candidate['primer_1_start']) <= 5 and 
-                                             abs(hit['end'] - candidate['primer_1_end']) <= 5)
-                                if not is_expected:
-                                    offtarget_hits.append(hit)
-                    
-                    if not offtarget_hits:
-                        total_p1_clean += 1
-                        r1 = candidate
-                        r1['primer_1_notes'] = 'No off-targets'
-                        print(f"  ✓ Clean P1 found at MAX_ARM={attempt_arm_size}bp (candidate #{idx+1}, {total_p1_clean} clean / {total_p1_tested} tested)")
-                        break
-                    else:
-                        total_p1_offtargets += 1
-                        
-                        # Categorize off-targets
-                        other_chrom = [h for h in offtarget_hits if h['chrom'] != chrom]
-                        same_chrom_far = [h for h in offtarget_hits if h['chrom'] == chrom and abs(h['start'] - position) > 10000]
-                        same_chrom_near = [h for h in offtarget_hits if h['chrom'] == chrom and abs(h['start'] - position) <= 10000]
-                        
-                        # Categorize by WORST type present
-                        if same_chrom_near:
-                            category = 'same_chrom_near'
-                        elif same_chrom_far:
-                            category = 'same_chrom_far'
-                        elif other_chrom:
-                            category = 'diff_chrom'
-                        else:
-                            category = 'unknown'
-                        
-                        print(f"    Candidate #{idx+1} ({category}): {candidate['primer_1_seq']}")
-                        
-                        # Save fallbacks in priority order: diff_chrom > same_chrom_far > same_chrom_near
-                        if category == 'diff_chrom' and not best_fallback_diff_chrom:
-                            best_fallback_diff_chrom = candidate.copy()
-                            best_fallback_diff_chrom['primer_1_notes'] = f'Off-targets on different chromosome(s): {len(other_chrom)} hit(s)'
-                        elif category == 'same_chrom_far' and not best_fallback_same_chrom:
-                            best_fallback_same_chrom = candidate.copy()
-                            best_fallback_same_chrom['primer_1_notes'] = f'Off-targets on same chromosome >10kb away: {len(same_chrom_far)} hit(s)'
-                        elif category == 'same_chrom_near' and not best_fallback_near:
-                            best_fallback_near = candidate.copy()
-                            best_fallback_near['primer_1_notes'] = f'Off-targets within 10kb: {len(same_chrom_near)} hit(s)'
-            
-            os.unlink(batch_fasta)
-            os.unlink(batch_psl)
-        else:
-            r1 = candidates[0]
-            r1['primer_1_notes'] = 'No off-target check performed'
-            break
+            # Try to find P3
+            if p3 in upstream_seq:
+                print(f"    P3 found FORWARD in upstream (wrong place!)")
+            if rc(p3) in upstream_seq:
+                print(f"    P3 found RC in upstream (wrong place!)")
+            if p3 in downstream_seq:
+                print(f"    P3 found FORWARD in downstream")
+            if rc(p3) in downstream_seq:
+                print(f"    P3 found RC in downstream")
         
-        # If we found a clean primer, stop searching
-        if r1:
-            break
-    
-    # If no clean primer found after trying all sizes, use best fallback
-    if not r1:
-        if best_fallback_diff_chrom:
-            r1 = best_fallback_diff_chrom
-            print(f"  ! Using fallback P1 (different chromosome off-targets) - tested {total_p1_tested} candidates, all had off-targets")
-        elif best_fallback_same_chrom:
-            r1 = best_fallback_same_chrom
-            print(f"  ! Using fallback P1 (same chrom >10kb off-targets) - tested {total_p1_tested} candidates, all had off-targets")
-        elif best_fallback_near:
-            r1 = best_fallback_near
-            print(f"  ! Using fallback P1 (same chrom <10kb off-targets - LAST RESORT) - tested {total_p1_tested} candidates, all had off-targets")
-        else:
-            r1 = {
-                'primer_1_seq': 'ERROR',
-                'primer_1_start': None,
-                'primer_1_end': None,
+        # Design P1 candidates
+        p3_start = time.time()
+        p1_candidates, p1_error = design_outer_primer_for_p1p2_arm(
+            upstream_seq, p2, upstream_start, strand, position, args, 
+            target_arm_size=args.max_arm, num_return=50, debug=(idx == 0)
+        )
+        primer3_time += time.time() - p3_start
+        
+        # Debug: print design results for first row
+        if idx == 0 or not p1_candidates:
+            print(f"    P1 candidates: {len(p1_candidates)}")
+            if not p1_candidates:
+                print(f"    P1 design failed: {p1_error}")
+                print(f"    DEBUG: Row {row_idx+1} ({gene_name})")
+                print(f"      Position: {position}, Strand: {strand}")
+                print(f"      P2 locus: {p2_locus}")
+                print(f"      P2 sequence: {p2[:30]}...")
+                print(f"      Upstream start: {upstream_start}, length: {len(upstream_seq)}bp")
+                print(f"      Upstream first 50bp: {upstream_seq[:50]}")
+                print(f"      Looking for P2 in upstream:")
+                if p2 in upstream_seq:
+                    print(f"        Found at position {upstream_seq.find(p2)}")
+                elif rc(p2) in upstream_seq:
+                    print(f"        Found RC at position {upstream_seq.find(rc(p2))}")
+                else:
+                    print(f"        NOT FOUND (neither forward nor RC)")
+        
+        # Design P4 candidates
+        p3_start = time.time()
+        p4_candidates, p4_error = design_outer_primer_for_p3p4_arm(
+            downstream_seq, p3, downstream_start, strand, position, args,
+            target_arm_size=args.max_arm, num_return=50, debug=(idx == 0)
+        )
+        primer3_time += time.time() - p3_start
+        
+        # Debug: print design results for first row
+        if idx == 0 or not p4_candidates:
+            print(f"    P4 candidates: {len(p4_candidates)}")
+            if not p4_candidates:
+                print(f"    P4 design failed: {p4_error}")
+                print(f"    DEBUG: Row {row_idx+1} ({gene_name})")
+                print(f"      Position: {position}, Strand: {strand}")
+                print(f"      P3 locus: {p3_locus}")
+                print(f"      P3 sequence: {p3[:30]}...")
+                print(f"      Downstream start: {downstream_start}, length: {len(downstream_seq)}bp")
+                print(f"      Downstream first 50bp: {downstream_seq[:50]}")
+                print(f"      Looking for P3 in downstream:")
+                if p3 in downstream_seq:
+                    print(f"        Found at position {downstream_seq.find(p3)}")
+                elif rc(p3) in downstream_seq:
+                    print(f"        Found RC at position {downstream_seq.find(rc(p3))}")
+                else:
+                    print(f"        NOT FOUND (neither forward nor RC)")
+        
+        if not p1_candidates or not p4_candidates:
+            error_msg = []
+            if not p1_candidates:
+                error_msg.append(f"P1: {p1_error}")
+            if not p4_candidates:
+                error_msg.append(f"P4: {p4_error}")
+            error_str = "; ".join(error_msg)
+            errors.append(f"Row {row_idx+1} ({gene_name}): {error_str}")
+            result = {
+                'primer_1_seq': 'ERROR' if not p1_candidates else None,
                 'primer_1_locus': None,
                 'primer_1_tm': None,
                 'primer_1_gc': None,
                 'upstream_arm_length': None,
-                'primer_1_notes': f'No suitable primer found (tested {total_p1_tested} candidates, all had off-targets)'
-            }
-    
-    print(f"\nDesigning P4 (pairs with P3):")
-    r4 = None
-    best_fallback_diff_chrom = None
-    best_fallback_same_chrom = None
-    best_fallback_near = None
-    total_p4_tested = 0
-    total_p4_clean = 0
-    total_p4_offtargets = 0
-    
-    # Try all arm sizes from max_arm to max_arm_fallback
-    for attempt_arm_size in range(args.max_arm, args.max_arm_fallback + 1, 500):
-        if attempt_arm_size > args.max_arm:
-            print(f"  Retry with MAX_ARM={attempt_arm_size}bp...")
-            flanks = extract_flanks(genome, chrom, position, strand, attempt_arm_size + 100, attempt_arm_size)
-            p3p4_seq, p3p4_start = flanks[1], flanks[3]  # Downstream
-        
-        candidates = design_outer_primer_for_p3p4_arm(p3p4_seq, p3, p3p4_start, strand, position, args, num_return=50)
-        
-        for c in candidates:
-            c['_sort_score'] = c.get('score', 0)
-        candidates.sort(key=lambda c: (_gc_end_pref(c['primer_4_seq']), -c['_sort_score']))
-        for c in candidates:
-            c.pop('_sort_score', None)
-        
-        if not candidates:
-            continue
-        
-        print(f"    Testing {len(candidates)} P4 candidates...")
-        
-        if genome_fasta_path:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False) as f:
-                batch_fasta = f.name
-                for idx, candidate in enumerate(candidates):
-                    f.write(f">P4_row{n}_cand{idx}\n{candidate['primer_4_seq']}\n")
-            
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.psl', delete=False) as f:
-                batch_psl = f.name
-            
-            cmd = ['blat', genome_fasta_path, batch_fasta, batch_psl, '-stepSize=5', 
-                   '-repMatch=1000000', f'-minScore={args.blat_min_score}', 
-                   f'-minIdentity={args.blat_min_identity}', '-minMatch=1']
-            result = subprocess.run(cmd, capture_output=True, timeout=300)
-            
-            if result.returncode == 0:
-                all_hits = parse_blat_psl(batch_psl)
-                
-                for idx, candidate in enumerate(candidates):
-                    total_p4_tested += 1
-                    primer_id = f"P4_row{n}_cand{idx}"
-                    
-                    offtarget_hits = []
-                    if primer_id in all_hits:
-                        for hit in all_hits[primer_id][:5]:
-                            if hit['identity'] >= args.blat_min_identity and hit['score'] >= args.blat_min_score:
-                                is_expected = (hit['chrom'] == chrom and 
-                                            abs(hit['start'] - candidate['primer_4_start']) <= 5 and 
-                                            abs(hit['end'] - candidate['primer_4_end']) <= 5)
-                                if not is_expected:
-                                    offtarget_hits.append(hit)
-                    
-                    if not offtarget_hits:
-                        total_p4_clean += 1
-                        r4 = candidate
-                        r4['primer_4_notes'] = 'No off-targets'
-                        print(f"  ✓ Clean P4 found at MAX_ARM={attempt_arm_size}bp (candidate #{idx+1}, {total_p4_clean} clean / {total_p4_tested} tested)")
-                        break
-                    else:
-                        total_p4_offtargets += 1
-                        
-                        # Categorize off-targets
-                        other_chrom = [h for h in offtarget_hits if h['chrom'] != chrom]
-                        same_chrom_far = [h for h in offtarget_hits if h['chrom'] == chrom and abs(h['start'] - position) > 10000]
-                        same_chrom_near = [h for h in offtarget_hits if h['chrom'] == chrom and abs(h['start'] - position) <= 10000]
-                        
-                        # Categorize by WORST type present
-                        if same_chrom_near:
-                            category = 'same_chrom_near'
-                        elif same_chrom_far:
-                            category = 'same_chrom_far'
-                        elif other_chrom:
-                            category = 'diff_chrom'
-                        else:
-                            category = 'unknown'
-                        
-                        # Save fallbacks in priority order: diff_chrom > same_chrom_far > same_chrom_near
-                        if category == 'diff_chrom' and not best_fallback_diff_chrom:
-                            best_fallback_diff_chrom = candidate.copy()
-                            best_fallback_diff_chrom['primer_4_notes'] = f'Off-targets on different chromosome(s): {len(other_chrom)} hit(s)'
-                        elif category == 'same_chrom_far' and not best_fallback_same_chrom:
-                            best_fallback_same_chrom = candidate.copy()
-                            best_fallback_same_chrom['primer_4_notes'] = f'Off-targets on same chromosome >10kb away: {len(same_chrom_far)} hit(s)'
-                        elif category == 'same_chrom_near' and not best_fallback_near:
-                            best_fallback_near = candidate.copy()
-                            best_fallback_near['primer_4_notes'] = f'Off-targets within 10kb: {len(same_chrom_near)} hit(s)'
-            
-            os.unlink(batch_fasta)
-            os.unlink(batch_psl)
-        else:
-            r4 = candidates[0]
-            r4['primer_4_notes'] = 'No off-target check performed'
-            break
-        
-        # If we found a clean primer, stop searching
-        if r4:
-            break
-    
-    # If no clean primer found after trying all sizes, use best fallback
-    if not r4:
-        if best_fallback_diff_chrom:
-            r4 = best_fallback_diff_chrom
-            print(f"  ! Using fallback P4 (different chromosome off-targets) - tested {total_p4_tested} candidates, all had off-targets")
-        elif best_fallback_same_chrom:
-            r4 = best_fallback_same_chrom
-            print(f"  ! Using fallback P4 (same chrom >10kb off-targets) - tested {total_p4_tested} candidates, all had off-targets")
-        elif best_fallback_near:
-            r4 = best_fallback_near
-            print(f"  ! Using fallback P4 (same chrom <10kb off-targets - LAST RESORT) - tested {total_p4_tested} candidates, all had off-targets")
-        else:
-            r4 = {
-                'primer_4_seq': 'ERROR',
-                'primer_4_start': None,
-                'primer_4_end': None,
+                'primer_1_notes': p1_error if not p1_candidates else None,
+                'primer_4_seq': 'ERROR' if not p4_candidates else None,
                 'primer_4_locus': None,
                 'primer_4_tm': None,
                 'primer_4_gc': None,
                 'downstream_arm_length': None,
-                'primer_4_notes': f'No suitable primer found (tested {total_p4_tested} candidates, all had off-targets)'
+                'primer_4_notes': p4_error if not p4_candidates else None
             }
+            batch_results.append((row_idx, result))
+            continue
+        
+        # Sort by GC-clamp preference
+        p1_candidates.sort(key=lambda c: _gc_end_pref(c['primer_1_seq']))
+        p4_candidates.sort(key=lambda c: _gc_end_pref(c['primer_4_seq']))
+        
+        p2_start, p2_end = parse_locus_coords(p2_locus)
+        p3_start, p3_end = parse_locus_coords(p3_locus)
+        
+        primer_designs.append({
+            'row_idx': row_idx,
+            'row': row,
+            'p1_candidates': p1_candidates,
+            'p4_candidates': p4_candidates,
+            'chrom': chrom,
+            'strand': strand,
+            'position': position,
+            'p2': p2,
+            'p3': p3,
+            'p2_start': p2_start,
+            'p2_end': p2_end,
+            'p3_start': p3_start,
+            'p3_end': p3_end
+        })
     
-    # Summary
-    if r1['primer_1_seq'] != 'ERROR':
-        print(f"✓ P1: {r1['primer_1_seq']}")
-        if r1.get('primer_1_notes'):
-            print(f"  Note: {r1['primer_1_notes']}")
-    else:
-        print(f"✗ P1: {r1['primer_1_notes']}")
+    step1_time = time.time() - step1_start
+    print(f"\n  Step 1 completed in {step1_time:.1f}s")
+    print(f"    - Average: {step1_time/len(batch_rows):.2f}s per row")
+    print(f"    - Designed primers for {len(primer_designs)} rows")
+    print(f"    - Timing breakdown:")
+    print(f"      • Sequence extraction: {extraction_time:.2f}s ({extraction_time/step1_time*100:.1f}%)")
+    print(f"      • Primer3 calls: {primer3_time:.2f}s ({primer3_time/step1_time*100:.1f}%)")
+    other_time = step1_time - extraction_time - primer3_time
+    print(f"      • Other (find_primer, etc): {other_time:.2f}s ({other_time/step1_time*100:.1f}%)")
     
-    if r4['primer_4_seq'] != 'ERROR':
-        print(f"✓ P4: {r4['primer_4_seq']}")
-        if r4.get('primer_4_notes'):
-            print(f"  Note: {r4['primer_4_notes']}")
-    else:
-        print(f"✗ P4: {r4['primer_4_notes']}")
+    if errors:
+        print(f"  Errors during design: {len(errors)}")
+        # Print first few errors for debugging
+        for error in errors[:5]:
+            print(f"    - {error}")
+        if len(errors) > 5:
+            print(f"    ... and {len(errors)-5} more errors")
     
-    # Calculate arm lengths from genomic coordinates
-    upstream_arm_length = None
-    downstream_arm_length = None
+    if not primer_designs:
+        return batch_results
     
-    if (r1.get('primer_1_start') is not None and r1.get('primer_1_end') is not None 
-        and p2_start is not None and p2_end is not None):
-        leftmost = min(r1['primer_1_start'], p2_start)
-        rightmost = max(r1['primer_1_end'], p2_end)
-        upstream_arm_length = rightmost - leftmost + 1
-        print(f"  Upstream arm: {upstream_arm_length}bp")
+    # Step 2: Create mega-FASTA with ALL primer candidates
+    total_primers = sum(len(d['p1_candidates']) + len(d['p4_candidates']) 
+                       for d in primer_designs)
+    print(f"\nStep 2: Preparing to check {total_primers} primers in ONE BLAT call...")
     
-    if (r4.get('primer_4_start') is not None and r4.get('primer_4_end') is not None 
-        and p3_start is not None and p3_end is not None):
-        leftmost = min(r4['primer_4_start'], p3_start)
-        rightmost = max(r4['primer_4_end'], p3_end)
-        downstream_arm_length = rightmost - leftmost + (2 if strand == '-' else 1)
-        print(f"  Downstream arm: {downstream_arm_length}bp")
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False) as f:
+        primer_fasta = f.name
+        for design in primer_designs:
+            row_idx = design['row_idx']
+            
+            for cand_idx, cand in enumerate(design['p1_candidates']):
+                primer_id = f"row{row_idx}_P1_cand{cand_idx}"
+                f.write(f">{primer_id}\n{cand['primer_1_seq']}\n")
+            
+            for cand_idx, cand in enumerate(design['p4_candidates']):
+                primer_id = f"row{row_idx}_P4_cand{cand_idx}"
+                f.write(f">{primer_id}\n{cand['primer_4_seq']}\n")
     
-    r1['upstream_arm_length'] = upstream_arm_length
-    r4['downstream_arm_length'] = downstream_arm_length            
+    # Step 3: Run ONE BLAT call
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.psl', delete=False) as f:
+        psl_output = f.name
     
-    # Create locus strings
-    if r1.get('primer_1_start') is not None and r1.get('primer_1_end') is not None:
-        r1['primer_1_locus'] = f"{chrom}:{r1['primer_1_start']}-{r1['primer_1_end']} ({strand})"
-    else:
-        r1['primer_1_locus'] = None
+    print(f"  Running BLAT on {total_primers} primers...")
+    blat_start = time.time()
+    blat_success = run_blat_batch(primer_fasta, genome_fasta_path, psl_output,
+                                   args.blat_min_identity, args.blat_min_score)
+    blat_time = time.time() - blat_start
+    print(f"  BLAT completed in {blat_time:.1f}s ({total_primers/blat_time:.0f} primers/sec)")
     
-    if r4.get('primer_4_start') is not None and r4.get('primer_4_end') is not None:
-        opposite_strand = '-' if strand == '+' else '+'
-        r4['primer_4_locus'] = f"{chrom}:{r4['primer_4_start']}-{r4['primer_4_end']} ({opposite_strand})"
-    else:
-        r4['primer_4_locus'] = None
+    if not blat_success:
+        print("  WARNING: BLAT failed, using first candidate without off-target check")
+        for design in primer_designs:
+            result = create_result_from_candidates(
+                design['p1_candidates'][0], design['p4_candidates'][0],
+                design['chrom'], design['strand'],
+                design['p2_start'], design['p2_end'],
+                design['p3_start'], design['p3_end'],
+                'BLAT failed - no off-target check', 'BLAT failed - no off-target check'
+            )
+            batch_results.append((design['row_idx'], result))
+        
+        os.unlink(primer_fasta)
+        os.unlink(psl_output)
+        return batch_results
     
-    # Remove start/end columns
-    r1_filtered = {k: v for k, v in r1.items() if k not in ['primer_1_start', 'primer_1_end']}
-    r4_filtered = {k: v for k, v in r4.items() if k not in ['primer_4_start', 'primer_4_end']}
+    # Step 4: Parse BLAT results
+    blat_hits = parse_blat_psl(psl_output)
+    print(f"  BLAT found hits for {len(blat_hits)} primers")
     
-    return {**r1_filtered, **r4_filtered}
+    # Step 5: Select best clean candidates for each row
+    print(f"\nStep 3: Selecting best clean primer pair for each row...")
+    
+    clean_count = 0
+    offtarget_count = 0
+    
+    for design in primer_designs:
+        row_idx = design['row_idx']
+        gene_name = get_gene_name(design['row'], row_idx)
+        position = design['position']
+        
+        # Track best alternatives by category for fallback
+        best_p1_clean = None
+        best_p1_diff_chrom = None
+        best_p1_same_chrom = None
+        best_p1_near = None
+        
+        best_p4_clean = None
+        best_p4_diff_chrom = None
+        best_p4_same_chrom = None
+        best_p4_near = None
+        
+        # Find best P1
+        for cand_idx, cand in enumerate(design['p1_candidates']):
+            primer_id = f"row{row_idx}_P1_cand{cand_idx}"
+            has_ot, num_ot, details, category = check_offtargets(
+                blat_hits, primer_id, design['chrom'],
+                cand['primer_1_start'], cand['primer_1_end'], position, args
+            )
+            
+            if not has_ot:
+                best_p1_clean = (cand, 'No off-targets' if cand_idx == 0 else f'Clean (alternative #{cand_idx+1})')
+                break
+            else:
+                # Save best fallback by category
+                if category == 'diff_chrom' and not best_p1_diff_chrom:
+                    best_p1_diff_chrom = (cand, f'Off-targets on different chromosome(s): {details}')
+                elif category == 'same_chrom_far' and not best_p1_same_chrom:
+                    best_p1_same_chrom = (cand, f'Off-targets on same chromosome >10kb away: {details}')
+                elif category == 'same_chrom_near' and not best_p1_near:
+                    best_p1_near = (cand, f'Off-targets within 10kb: {details}')
+        
+        # Select best P1 with priority: clean > diff_chrom > same_chrom > near
+        if best_p1_clean:
+            best_p1, p1_notes = best_p1_clean
+        elif best_p1_diff_chrom:
+            best_p1, p1_notes = best_p1_diff_chrom
+        elif best_p1_same_chrom:
+            best_p1, p1_notes = best_p1_same_chrom
+        elif best_p1_near:
+            best_p1, p1_notes = best_p1_near
+        else:
+            best_p1 = design['p1_candidates'][0]
+            p1_notes = 'Off-targets present (best available)'
+        
+        # Find best P4
+        for cand_idx, cand in enumerate(design['p4_candidates']):
+            primer_id = f"row{row_idx}_P4_cand{cand_idx}"
+            has_ot, num_ot, details, category = check_offtargets(
+                blat_hits, primer_id, design['chrom'],
+                cand['primer_4_start'], cand['primer_4_end'], position, args
+            )
+            
+            if not has_ot:
+                best_p4_clean = (cand, 'No off-targets' if cand_idx == 0 else f'Clean (alternative #{cand_idx+1})')
+                break
+            else:
+                # Save best fallback by category
+                if category == 'diff_chrom' and not best_p4_diff_chrom:
+                    best_p4_diff_chrom = (cand, f'Off-targets on different chromosome(s): {details}')
+                elif category == 'same_chrom_far' and not best_p4_same_chrom:
+                    best_p4_same_chrom = (cand, f'Off-targets on same chromosome >10kb away: {details}')
+                elif category == 'same_chrom_near' and not best_p4_near:
+                    best_p4_near = (cand, f'Off-targets within 10kb: {details}')
+        
+        # Select best P4 with priority: clean > diff_chrom > same_chrom > near
+        if best_p4_clean:
+            best_p4, p4_notes = best_p4_clean
+        elif best_p4_diff_chrom:
+            best_p4, p4_notes = best_p4_diff_chrom
+        elif best_p4_same_chrom:
+            best_p4, p4_notes = best_p4_same_chrom
+        elif best_p4_near:
+            best_p4, p4_notes = best_p4_near
+        else:
+            best_p4 = design['p4_candidates'][0]
+            p4_notes = 'Off-targets present (best available)'
+        
+        # Track stats
+        p1_is_clean = 'No off-targets' in p1_notes or 'Clean' in p1_notes
+        p4_is_clean = 'No off-targets' in p4_notes or 'Clean' in p4_notes
+        
+        if p1_is_clean and p4_is_clean:
+            clean_count += 1
+            print(f"  Row {row_idx+1:3d} ({gene_name:20s}): ✓ Clean")
+        else:
+            offtarget_count += 1
+            print(f"  Row {row_idx+1:3d} ({gene_name:20s}): ⚠ Has off-targets")
+        
+        # Create result
+        result = create_result_from_candidates(
+            best_p1, best_p4,
+            design['chrom'], design['strand'],
+            design['p2_start'], design['p2_end'],
+            design['p3_start'], design['p3_end'],
+            p1_notes, p4_notes
+        )
+        batch_results.append((row_idx, result))
+    
+    print(f"\n  Summary: {clean_count} clean, {offtarget_count} with off-targets")
+    
+    # Step 6: Progressive flank widening for rows that couldn't find clean primers
+    rows_needing_wider_flanks = []
+    
+    for design in primer_designs:
+        row_idx = design['row_idx']
+        # Check if this row was saved with off-target notes
+        saved_result = None
+        for saved_row_idx, saved_res in batch_results:
+            if saved_row_idx == row_idx:
+                saved_result = saved_res
+                break
+        
+        if saved_result:
+            p1_has_ot = saved_result.get('primer_1_notes', '') and 'Off-targets' in saved_result.get('primer_1_notes', '')
+            p4_has_ot = saved_result.get('primer_4_notes', '') and 'Off-targets' in saved_result.get('primer_4_notes', '')
+            if p1_has_ot or p4_has_ot:
+                # Track which specific primers need rescue
+                rows_needing_wider_flanks.append((design, saved_result, p1_has_ot, p4_has_ot))
+    
+    if rows_needing_wider_flanks and args.max_arm < args.max_arm_fallback:
+        # Count how many need each primer
+        total_need_p1 = sum(1 for _, _, p1_ot, _ in rows_needing_wider_flanks if p1_ot)
+        total_need_p4 = sum(1 for _, _, _, p4_ot in rows_needing_wider_flanks if p4_ot)
+        
+        print(f"\n{'='*70}")
+        print(f"STEP 4: WIDER FLANK RESCUE")
+        print(f"{'='*70}")
+        print(f"rows needing rescue: {len(rows_needing_wider_flanks)}")
+        print(f"  • P1 needs rescue: {total_need_p1} rows")
+        print(f"  • P4 needs rescue: {total_need_p4} rows")
+        print(f"  • Both need rescue: {total_need_p1 + total_need_p4 - len(rows_needing_wider_flanks)} rows")
+        print(f"\nTrying flanks: {args.max_arm + 500}bp to {args.max_arm_fallback}bp (500bp steps)")
+        print(f"{'='*70}")
+        
+        widening_rescued = 0
+        remaining_rows = rows_needing_wider_flanks
+        
+        for test_flank in range(args.max_arm + 500, args.max_arm_fallback + 1, 500):
+            if not remaining_rows:
+                break
+            
+            # Count needs for this iteration
+            need_p1 = sum(1 for _, _, p1_ot, _ in remaining_rows if p1_ot)
+            need_p4 = sum(1 for _, _, _, p4_ot in remaining_rows if p4_ot)
+            
+            print(f"\n  ┌─ Flank width: {test_flank}bp ─────────────────────")
+            print(f"  │ Remaining: {len(remaining_rows)} rows (P1: {need_p1}, P4: {need_p4})")
+            
+            # Process all rows at this flank size
+            rescued_this_flank = []
+            flank_designs = []
+            for design, old_result, needs_p1_rescue, needs_p4_rescue in remaining_rows:
+                    row_idx = design['row_idx']
+                    chrom = design['chrom']
+                    position = design['position']
+                    strand = design['strand']
+                    p2 = design['p2']
+                    p3 = design['p3']
+                    
+                    wider_upstream, wider_downstream, wider_up_start, wider_down_start = extract_flanks(
+                        genome, chrom, position, strand, test_flank
+                    )
+                    
+                    if wider_upstream is None:
+                        continue
+                    
+                    # Only design primers that need rescue
+                    p1_wider = None
+                    p4_wider = None
+                    
+                    if needs_p1_rescue:
+                        p1_wider, _ = design_outer_primer_for_p1p2_arm(
+                            wider_upstream, p2, wider_up_start, strand, position, args,
+                            target_arm_size=test_flank, num_return=50, debug=False
+                        )
+                    
+                    if needs_p4_rescue:
+                        p4_wider, _ = design_outer_primer_for_p3p4_arm(
+                            wider_downstream, p3, wider_down_start, strand, position, args,
+                            target_arm_size=test_flank, num_return=50, debug=False
+                        )
+                    
+                    # Only add to flank_designs if at least one primer was designed
+                    if p1_wider or p4_wider:
+                        # Sort by GC-clamp preference
+                        if p1_wider:
+                            p1_wider.sort(key=lambda c: _gc_end_pref(c['primer_1_seq']))
+                        if p4_wider:
+                            p4_wider.sort(key=lambda c: _gc_end_pref(c['primer_4_seq']))
+                        
+                        flank_designs.append({
+                            'design': design,
+                            'old_result': old_result,
+                            'row_idx': row_idx,
+                            'p1_candidates': p1_wider if p1_wider else [],
+                            'p4_candidates': p4_wider if p4_wider else [],
+                            'chrom': chrom,
+                            'position': position,
+                            'needs_p1_rescue': needs_p1_rescue,
+                            'needs_p4_rescue': needs_p4_rescue
+                        })
+                
+            if not flank_designs:
+                print(f"    No primers designed at {test_flank}bp")
+                continue
+            
+            # ========================================
+            # Process P1 primers separately
+            # ========================================
+            
+            # Check if any rows need P1 rescue
+            genes_needing_p1 = [fd for fd in flank_designs if fd.get('needs_p1_rescue', False)]
+            
+            best_p1_by_gene = {}  # row_idx -> (candidate, notes)
+            
+            if genes_needing_p1:
+                # Create FASTA with only P1 candidates
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False) as f:
+                    p1_fasta = f.name
+                    for flank_design in genes_needing_p1:
+                        row_idx = flank_design['row_idx']
+                        for cand_idx, cand in enumerate(flank_design['p1_candidates']):
+                            f.write(f">row{row_idx}_flank{test_flank}_P1_{cand_idx}\n{cand['primer_1_seq']}\n")
+            
+                # Run BLAT for P1
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.psl', delete=False) as f:
+                    p1_psl = f.name
+                
+                p1_count = sum(len(fd['p1_candidates']) for fd in genes_needing_p1)
+                print(f"  │  Testing P1: {len(genes_needing_p1)} rows, {p1_count} primers")
+                
+                if not run_blat_batch(p1_fasta, genome_fasta_path, p1_psl,
+                                     args.blat_min_identity, args.blat_min_score):
+                    print(f"    BLAT failed for P1 at {test_flank}bp")
+                    os.unlink(p1_fasta)
+                    os.unlink(p1_psl)
+                    continue
+                
+                p1_hits = parse_blat_psl(p1_psl)
+                
+                # Select best P1 for each gene that needs rescue
+                for flank_design in genes_needing_p1:
+                    row_idx = flank_design['row_idx']
+                    position = flank_design['position']
+                    
+                    best_p1_clean = None
+                    best_p1_fallback = None
+                    
+                    for cand_idx, cand in enumerate(flank_design['p1_candidates']):
+                        primer_id = f"row{row_idx}_flank{test_flank}_P1_{cand_idx}"
+                        has_ot, num_ot, details, category = check_offtargets(
+                            p1_hits, primer_id, flank_design['chrom'],
+                            cand['primer_1_start'], cand['primer_1_end'], position, args
+                        )
+                        
+                        if not has_ot:
+                            best_p1_clean = (cand, f'Wider flank rescue: {test_flank}bp')
+                            break
+                        elif category == 'diff_chrom' and not best_p1_fallback:
+                            best_p1_fallback = (cand, f'Wider flank ({test_flank}bp) with off-targets on different chromosomes')
+                    
+                    if best_p1_clean:
+                        best_p1_by_gene[row_idx] = best_p1_clean
+                
+                # Cleanup P1 files
+                os.unlink(p1_fasta)
+                os.unlink(p1_psl)
+            else:
+                print(f"  │ → P1: All clean (no rescue needed)")
+            
+            # ========================================
+            # Process P4 primers separately
+            # ========================================
+            
+            # Check if any rows need P4 rescue
+            genes_needing_p4 = [fd for fd in flank_designs if fd.get('needs_p4_rescue', False)]
+            
+            best_p4_by_gene = {}  # row_idx -> (candidate, notes)
+            
+            if genes_needing_p4:
+                # Create FASTA with only P4 candidates
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False) as f:
+                    p4_fasta = f.name
+                    for flank_design in genes_needing_p4:
+                        row_idx = flank_design['row_idx']
+                        for cand_idx, cand in enumerate(flank_design['p4_candidates']):
+                            f.write(f">row{row_idx}_flank{test_flank}_P4_{cand_idx}\n{cand['primer_4_seq']}\n")
+                
+                # Run BLAT for P4
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.psl', delete=False) as f:
+                    p4_psl = f.name
+                
+                p4_count = sum(len(fd['p4_candidates']) for fd in genes_needing_p4)
+                print(f"  │  Testing P4: {len(genes_needing_p4)} rows, {p4_count} primers")
+                
+                if not run_blat_batch(p4_fasta, genome_fasta_path, p4_psl,
+                                     args.blat_min_identity, args.blat_min_score):
+                    print(f"    BLAT failed for P4 at {test_flank}bp")
+                    os.unlink(p4_fasta)
+                    os.unlink(p4_psl)
+                    continue
+                
+                p4_hits = parse_blat_psl(p4_psl)
+                
+                # Select best P4 for each gene that needs rescue
+                for flank_design in genes_needing_p4:
+                    row_idx = flank_design['row_idx']
+                    position = flank_design['position']
+                    
+                    best_p4_clean = None
+                    best_p4_fallback = None
+                    
+                    for cand_idx, cand in enumerate(flank_design['p4_candidates']):
+                        primer_id = f"row{row_idx}_flank{test_flank}_P4_{cand_idx}"
+                        has_ot, num_ot, details, category = check_offtargets(
+                            p4_hits, primer_id, flank_design['chrom'],
+                            cand['primer_4_start'], cand['primer_4_end'], position, args
+                        )
+                        
+                        if not has_ot:
+                            best_p4_clean = (cand, f'Wider flank rescue: {test_flank}bp')
+                            break
+                        elif category == 'diff_chrom' and not best_p4_fallback:
+                            best_p4_fallback = (cand, f'Wider flank ({test_flank}bp) with off-targets on different chromosomes')
+                    
+                    if best_p4_clean:
+                        best_p4_by_gene[row_idx] = best_p4_clean
+            
+                # Cleanup P4 files
+                os.unlink(p4_fasta)
+                os.unlink(p4_psl)
+            else:
+                print(f"  │ → P4: All clean (no rescue needed)")
+            
+            # ========================================
+            # Combine results and update batch_results
+            # ========================================
+            
+            for flank_design in flank_designs:
+                row_idx = flank_design['row_idx']
+                design = flank_design['design']
+                gene_name = get_gene_name(design['row'], row_idx)
+                
+                # Get best P1 and P4 from the separate processing steps
+                best_p1_clean = best_p1_by_gene.get(row_idx)
+                best_p4_clean = best_p4_by_gene.get(row_idx)
+            
+                # Accept any clean primers found (independent rescue)
+                # Get current result for this row to check which primers need rescue
+                current_result = None
+                for idx, res in batch_results:
+                    if idx == row_idx:
+                        current_result = res
+                        break
+            
+                # Determine which primers to use (prioritize clean from wider flanks)
+                use_p1 = None
+                use_p1_notes = None
+                use_p4 = None
+                use_p4_notes = None
+            
+                # For P1: use clean from wider flank if available, else keep original
+                if best_p1_clean:
+                    p1_cand, p1_notes = best_p1_clean
+                    use_p1 = p1_cand
+                    use_p1_notes = p1_notes
+                elif current_result:
+                    # Keep original P1 (we'll extract from current_result below)
+                    pass
+            
+                # For P4: use clean from wider flank if available, else keep original
+                if best_p4_clean:
+                    p4_cand, p4_notes = best_p4_clean
+                    use_p4 = p4_cand
+                    use_p4_notes = p4_notes
+                elif current_result:
+                    # Keep original P4 (we'll extract from current_result below)
+                    pass
+            
+                # Only update if at least one primer improved to clean
+                if best_p1_clean or best_p4_clean:
+                    # If we need to keep an original primer, reconstruct candidate dict from current_result
+                    if current_result and not use_p1:
+                        # Reconstruct P1 candidate from current result
+                        p1_start, p1_end = parse_locus_coords(current_result.get('primer_1_locus'))
+                        use_p1 = {
+                            'primer_1_seq': current_result['primer_1_seq'],
+                            'primer_1_start': p1_start,
+                            'primer_1_end': p1_end,
+                            'primer_1_tm': current_result['primer_1_tm'],
+                            'primer_1_gc': current_result['primer_1_gc']
+                        }
+                        use_p1_notes = current_result.get('primer_1_notes', '')
+                
+                    if current_result and not use_p4:
+                        # Reconstruct P4 candidate from current result
+                        p4_start, p4_end = parse_locus_coords(current_result.get('primer_4_locus'))
+                        use_p4 = {
+                            'primer_4_seq': current_result['primer_4_seq'],
+                            'primer_4_start': p4_start,
+                            'primer_4_end': p4_end,
+                            'primer_4_tm': current_result['primer_4_tm'],
+                            'primer_4_gc': current_result['primer_4_gc']
+                        }
+                        use_p4_notes = current_result.get('primer_4_notes', '')
+                
+                    # Create result with mix of new and/or original primers
+                    if use_p1 and use_p4:
+                        result = create_result_from_candidates(
+                            use_p1, use_p4,
+                            design['chrom'], design['strand'],
+                            design['p2_start'], design['p2_end'],
+                            design['p3_start'], design['p3_end'],
+                            use_p1_notes, use_p4_notes
+                        )
+                    
+                        # Update the batch_results (remove old result, add new one)
+                        batch_results = [(idx, res) for idx, res in batch_results if idx != row_idx]
+                        batch_results.append((row_idx, result))
+                    
+                        rescued_this_flank.append(design)
+                        widening_rescued += 1
+                    
+                        # Show which primers were rescued
+                        p1_symbol = "✓" if best_p1_clean else "·"
+                        p4_symbol = "✓" if best_p4_clean else "·"
+                        print(f"  │   [{p1_symbol}][{p4_symbol}] Row {row_idx+1:3d} {gene_name}")
+            
+            # Summary for this flank size
+            if rescued_this_flank:
+                # Count what was rescued
+                p1_rescued = sum(1 for d in rescued_this_flank if d['row_idx'] in best_p1_by_gene)
+                p4_rescued = sum(1 for d in rescued_this_flank if d['row_idx'] in best_p4_by_gene)
+                print(f"  │")
+                print(f"  └─ Rescued: {len(rescued_this_flank)} rows (P1: {p1_rescued}, P4: {p4_rescued})")
+            else:
+                print(f"  └─ No rows rescued at {test_flank}bp")
+            
+            # Update remaining_rows: remove fully rescued rows, update flags for partially rescued
+            fully_rescued_designs = set()
+            updated_flags = {}  # row_idx -> (new_p1_has_ot, new_p4_has_ot)
+            
+            for design in rescued_this_flank:
+                row_idx = design['row_idx']
+                # Check the updated result to see which primers are clean
+                for idx, res in batch_results:
+                    if idx == row_idx:
+                        p1_clean = not (res.get('primer_1_notes', '') and 'Off-targets' in res.get('primer_1_notes', ''))
+                        p4_clean = not (res.get('primer_4_notes', '') and 'Off-targets' in res.get('primer_4_notes', ''))
+                        
+                        if p1_clean and p4_clean:
+                            # Both clean - remove from queue
+                            fully_rescued_designs.add(row_idx)
+                        else:
+                            # Partially rescued - update flags
+                            updated_flags[row_idx] = (not p1_clean, not p4_clean)
+                        break
+            
+            # Rebuild remaining_rows with updated flags
+            new_remaining_rows = []
+            for design, old_result, p1_has_ot, p4_has_ot in remaining_rows:
+                row_idx = design['row_idx']
+                
+                # Skip if fully rescued
+                if row_idx in fully_rescued_designs:
+                    continue
+                
+                # Update flags if partially rescued
+                if row_idx in updated_flags:
+                    p1_has_ot, p4_has_ot = updated_flags[row_idx]
+                
+                new_remaining_rows.append((design, old_result, p1_has_ot, p4_has_ot))
+            
+            remaining_rows = new_remaining_rows
+        
+        # Final summary
+        print(f"\n{'='*70}")
+        print(f"RESCUE COMPLETE")
+        print(f"{'='*70}")
+        print(f" Rescued: {widening_rescued} rows")
+        
+        if remaining_rows:
+            still_need_p1 = sum(1 for _, _, p1_ot, _ in remaining_rows if p1_ot)
+            still_need_p4 = sum(1 for _, _, _, p4_ot in remaining_rows if p4_ot)
+            print(f"⚠ Remaining with off-targets: {len(remaining_rows)} rows")
+            print(f"  • P1 still has off-targets: {still_need_p1}")
+            print(f"  • P4 still has off-targets: {still_need_p4}")
+            print(f"  Using best available primers (with off-target notes)")
+        else:
+            print(f" All rows rescued successfully!")
+        print(f"{'='*70}")
+    
+    # Cleanup
+    os.unlink(primer_fasta)
+    os.unlink(psl_output)
+    
+    return batch_results
+
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Design outer primers (P1, P4) with checkpoint/resume',
-        epilog="Use --flush-every N to save progress every N rows"
+        description='Design outer primers (P1, P4) with batch processing',
+        epilog="Batch processing dramatically improves performance by running one BLAT call per batch"
     )
     parser.add_argument('--input', required=True, help='Input CSV')
     parser.add_argument('--output', required=True, help='Output CSV')
-    parser.add_argument('--genome', help='Genome FASTA')
-    parser.add_argument('--flush-every', type=int, default=10, 
-                       help='Save progress every N rows (default: 10)')
+    parser.add_argument('--genome', required=True, help='Genome FASTA')
+    parser.add_argument('--batch-size', type=int, default=100, 
+                       help='Process N rows per batch (default: 100)')
     parser.add_argument('--no-resume', action='store_true',
                        help='Overwrite existing output instead of resuming from checkpoint')
     parser.add_argument('--skip-offtarget-check', action='store_true',
@@ -1001,8 +1513,7 @@ def main():
     parser.add_argument('--max-arm', type=int, default=1000,
                        help='Maximum homology arm length in bp (default: 1000)')
     parser.add_argument('--max-arm-fallback', type=int, default=10000,
-                   help='Maximum homology arm length to try before using primers with off-targets (default: 10000)')
-
+                       help='Maximum homology arm length to try before giving up (default: 10000)')
     
     # Primer design parameters
     parser.add_argument('--primer-min-size', type=int, default=22,
@@ -1026,31 +1537,60 @@ def main():
         print(f"ERROR: Genome FASTA not found: {args.genome}")
         sys.exit(1)
     
-    genome = load_genome(args.genome)
-
+    if not os.path.exists(args.input):
+        print(f"ERROR: Input CSV not found: {args.input}")
+        sys.exit(1)
+    
     # Check BLAT availability
     genome_fasta_for_blat = None
     if not args.skip_offtarget_check:
         try:
             subprocess.run(['blat'], capture_output=True, text=True)
             genome_fasta_for_blat = args.genome
-            print("✓ BLAT found - will check for off-targets")
+            print(" BLAT found - will check for off-targets")
         except FileNotFoundError:
-            print("WARNING: BLAT not found - skipping off-target checks")
-            print("  Install BLAT or use --skip-offtarget-check to suppress this warning")
+            print("ERROR: BLAT not found in PATH")
+            print("  Install BLAT or use --skip-offtarget-check to proceed without validation")
+            sys.exit(1)
     else:
-        print("Skipping off-target checks (--skip-offtarget-check)")
+        print("WARNING: Skipping off-target checks (--skip-offtarget-check)")
     
+    # Load genome
+    genome = load_genome(args.genome)
+    
+    # Load input CSV
     print(f"\nReading {args.input}...")
     df = pd.read_csv(args.input)
     print(f"Loaded {len(df)} rows")
     
+    # Validate that input has required primers from script 5
+    required_cols = ['chrom', 'pos', 'strand', 'primer_2_seq_genomic', 'primer_3_seq_genomic']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        print(f"ERROR: Input CSV missing required columns: {missing_cols}")
+        print(f"  This script requires output from script 5 (inner primers)")
+        sys.exit(1)
+    
+    # Check how many rows have inner primers
+    has_p2 = df['primer_2_seq_genomic'].notna() & (df['primer_2_seq_genomic'] != 'ERROR')
+    has_p3 = df['primer_3_seq_genomic'].notna() & (df['primer_3_seq_genomic'] != 'ERROR')
+    rows_with_primers = (has_p2 & has_p3).sum()
+    
+    print(f"  Rows with inner primers (P2 and P3): {rows_with_primers}/{len(df)}")
+    if rows_with_primers == 0:
+        print(f"ERROR: No rows have inner primers!")
+        print(f"  This script requires primer_2_seq_genomic and primer_3_seq_genomic to be filled.")
+        print(f"  Please run script 5 first to design inner primers.")
+        sys.exit(1)
+    elif rows_with_primers < len(df):
+        print(f"  Will skip {len(df) - rows_with_primers} rows without inner primers.")
+    
     print(f"\nConfiguration:")
-    print(f"  Homology arm length: {args.min_arm}-{args.max_arm} bp (will try up to {args.max_arm_fallback} bp before using primers with off-targets)")
+    print(f"  Homology arm length: {args.min_arm}-{args.max_arm} bp")
     print(f"  Primer size range: {args.primer_min_size}-{args.primer_max_size} bp")
     print(f"  Primer Tm range: {args.primer_min_tm}-{args.primer_max_tm}°C")
     print(f"  BLAT parameters: min identity={args.blat_min_identity}%, min score={args.blat_min_score}")
-    print(f"  Flush every: {args.flush_every} rows")
+    print(f"  Batch size: {args.batch_size} rows")
     
     # Check for existing output and resume
     start_idx = 0
@@ -1061,22 +1601,34 @@ def main():
         try:
             existing = pd.read_csv(args.output)
             if 'primer_1_seq' in existing.columns:
-                completed = existing['primer_1_seq'].notna() | existing['primer_4_seq'].notna()
+                # Find the last row that has BOTH primer_1 and primer_4 successfully designed
+                completed = (existing['primer_1_seq'].notna() & 
+                           (existing['primer_1_seq'] != 'ERROR') &
+                           existing['primer_4_seq'].notna() & 
+                           (existing['primer_4_seq'] != 'ERROR'))
                 if completed.any():
-                    start_idx = completed[::-1].idxmax() + 1
+                    # Find last completed row
+                    last_completed = completed[::-1].idxmax()
+                    start_idx = last_completed + 1
+                    print(f"[resume] Last completed row: {last_completed + 1}")
                     print(f"[resume] Resuming from row {start_idx + 1}")
+                else:
+                    print(f"[resume] No completed rows found, starting from beginning")
+            else:
+                print(f"[resume] No primer_1_seq column found, starting from beginning")
         except Exception as e:
             print(f"[resume] Could not read existing output: {e}")
+            print(f"[resume] Starting from beginning")
     
     # Pre-allocate results
-    results = [None] * len(df)
+    all_results = [None] * len(df)
     
     # Load existing results if resuming
     if start_idx > 0:
         try:
             existing = pd.read_csv(args.output)
             for i in range(start_idx):
-                results[i] = {
+                all_results[i] = {
                     col: existing.loc[i, col] if col in existing.columns else None
                     for col in ['primer_1_seq', 'primer_1_locus',
                                'primer_1_tm', 'primer_1_gc', 'upstream_arm_length', 'primer_1_notes',
@@ -1087,83 +1639,147 @@ def main():
             pass
     
     print(f"\nProcessing rows {start_idx + 1} to {len(df)}...")
-    print(f"Saving every {args.flush_every} rows\n")
+    print(f"Saving every {args.batch_size} rows\n")
     
-    processed = 0
-    for idx in range(start_idx, len(df)):
-        try:
-            results[idx] = process(df.iloc[idx], idx+1, genome, args, genome_fasta_for_blat)
-            processed += 1
-            
-            # Periodic save
-            if processed % args.flush_every == 0:
-                print(f"\n{'='*70}")
-                print(f"CHECKPOINT: {processed} rows ({idx+1}/{len(df)})")
-                print(f"{'='*70}")
+    # Process in batches
+    idx = start_idx
+    while idx < len(df):
+        batch_end = min(idx + args.batch_size, len(df))
+        batch_rows = [(i, df.iloc[i]) for i in range(idx, batch_end)]
+        
+        t0 = time.perf_counter() # start timer
+
+        # Process batch
+        if args.skip_offtarget_check:
+            # Simple processing without off-target check
+            batch_results = []
+            for row_idx, row in batch_rows:
+                chrom = row.get('chrom', '')
+                position = row.get('pos', None)
                 
-                # Fill missing results with empty dicts
-                save_results = []
-                for r in results:
-                    if r is not None:
-                        save_results.append(r)
-                    else:
-                        save_results.append({
-                            'primer_1_seq': None, 'primer_1_locus': None,
-                            'primer_1_tm': None, 'primer_1_gc': None, 'upstream_arm_length': None,
-                            'primer_1_notes': None,
-                            'primer_4_seq': None, 'primer_4_locus': None,
-                            'primer_4_tm': None, 'primer_4_gc': None, 'downstream_arm_length': None,
-                            'primer_4_notes': None
-                        })
+                # Handle NaN values in primer sequences
+                p2_raw = row.get('primer_2_seq_genomic', '')
+                p3_raw = row.get('primer_3_seq_genomic', '')
+                p2 = str(p2_raw).upper() if pd.notna(p2_raw) else ''
+                p3 = str(p3_raw).upper() if pd.notna(p3_raw) else ''
                 
-                out = pd.concat([df, pd.DataFrame(save_results)], axis=1)
-                out.to_csv(args.output, index=False)
-                print(f"✓ Saved to {args.output}")
+                strand = row.get('strand', '+')
+                p2_locus = row.get('primer_2_locus', '')
+                p3_locus = row.get('primer_3_locus', '')
                 
-                # Stats
-                completed = [r for r in results if r is not None]
-                success = sum(1 for r in completed if r['primer_1_seq'] != 'ERROR' and r['primer_4_seq'] != 'ERROR')
-                print(f"Success: {success}/{len(completed)} ({100*success/len(completed):.1f}%)\n")
+                # Skip rows without inner primers
+                if not p2 or not p3:
+                    continue
                 
-        except Exception as e:
-            print(f"\nERROR row {idx+1}: {e}")
-            traceback.print_exc()
-            results[idx] = {
-                'primer_1_seq': 'ERROR', 'primer_1_notes': str(e),
-                'primer_4_seq': 'ERROR', 'primer_4_notes': str(e)
-            }
-    
-    # Final save
-    print(f"\n{'='*70}")
-    print(f"FINAL SAVE")
-    print(f"{'='*70}")
-    
-    save_results = []
-    for r in results:
-        if r is not None:
-            save_results.append(r)
+                if not chrom or position is None:
+                    result = {
+                        'primer_1_seq': 'ERROR', 'primer_1_locus': None,
+                        'primer_1_tm': None, 'primer_1_gc': None, 'upstream_arm_length': None,
+                        'primer_1_notes': 'Missing required fields',
+                        'primer_4_seq': 'ERROR', 'primer_4_locus': None,
+                        'primer_4_tm': None, 'primer_4_gc': None, 'downstream_arm_length': None,
+                        'primer_4_notes': 'Missing required fields'
+                    }
+                else:
+                    try:
+                        position = int(position)
+                        upstream_seq, downstream_seq, upstream_start, downstream_start = extract_flanks(
+                            genome, chrom, position, strand, args.max_arm
+                        )
+                        
+                        if upstream_seq is None:
+                            result = {
+                                'primer_1_seq': 'ERROR', 'primer_1_notes': 'Chromosome not found',
+                                'primer_4_seq': 'ERROR', 'primer_4_notes': 'Chromosome not found'
+                            }
+                        else:
+                            p1_cands, _ = design_outer_primer_for_p1p2_arm(
+                                upstream_seq, p2, upstream_start, strand, position, args,
+                                target_arm_size=args.max_arm, num_return=1
+                            )
+                            p4_cands, _ = design_outer_primer_for_p3p4_arm(
+                                downstream_seq, p3, downstream_start, strand, position, args,
+                                target_arm_size=args.max_arm, num_return=1
+                            )
+                            
+                            if p1_cands and p4_cands:
+                                p2_start, p2_end = parse_locus_coords(p2_locus)
+                                p3_start, p3_end = parse_locus_coords(p3_locus)
+                                result = create_result_from_candidates(
+                                    p1_cands[0], p4_cands[0], chrom, strand,
+                                    p2_start, p2_end, p3_start, p3_end,
+                                    'No off-target check performed', 'No off-target check performed'
+                                )
+                            else:
+                                result = {
+                                    'primer_1_seq': 'ERROR', 'primer_1_notes': 'Primer3 failed',
+                                    'primer_4_seq': 'ERROR', 'primer_4_notes': 'Primer3 failed'
+                                }
+                    except Exception as e:
+                        result = {
+                            'primer_1_seq': 'ERROR', 'primer_1_notes': str(e),
+                            'primer_4_seq': 'ERROR', 'primer_4_notes': str(e)
+                        }
+                
+                batch_results.append((row_idx, result))
         else:
-            save_results.append({
-                'primer_1_seq': None, 'primer_1_locus': None,
-                'primer_1_tm': None, 'primer_1_gc': None, 'upstream_arm_length': None,
-                'primer_1_notes': None,
-                'primer_4_seq': None, 'primer_4_locus': None,
-                'primer_4_tm': None, 'primer_4_gc': None, 'downstream_arm_length': None,
-                'primer_4_notes': None
-            })
+            # Process with off-target checking
+            batch_results = process_batch(
+                batch_rows, genome, genome_fasta_for_blat, idx, args
+            )
+        
+        # Store results
+        for row_idx, result in batch_results:
+            all_results[row_idx] = result
+        
+        # Save checkpoint
+        print(f"\n{'='*70}")
+        print(f"CHECKPOINT: Saving results for rows {idx+1}-{batch_end}")
+        print(f"{'='*70}")
+
+        dt = time.perf_counter() - t0
+        rate = (args.batch_size / dt) if dt > 0 else float('inf')
+        print(f"[timing] Elapsed {dt:.2f}s | {args.batch_size} rows | {rate:.2f} rows/s", file=sys.stderr)
+        
+        # Fill missing results with empty dicts
+        save_results = []
+        for r in all_results:
+            if r is not None:
+                save_results.append(r)
+            else:
+                save_results.append({
+                    'primer_1_seq': None, 'primer_1_locus': None,
+                    'primer_1_tm': None, 'primer_1_gc': None, 'upstream_arm_length': None,
+                    'primer_1_notes': None,
+                    'primer_4_seq': None, 'primer_4_locus': None,
+                    'primer_4_tm': None, 'primer_4_gc': None, 'downstream_arm_length': None,
+                    'primer_4_notes': None
+                })
+        
+        out = pd.concat([df, pd.DataFrame(save_results)], axis=1)
+        out.to_csv(args.output, index=False)
+        print(f" Saved to {args.output}")
+        
+        # Stats
+        completed = [r for r in all_results if r is not None]
+        success = sum(1 for r in completed 
+                    if r['primer_1_seq'] not in ['ERROR', None] 
+                    and r['primer_4_seq'] not in ['ERROR', None])
+        print(f"Success: {success}/{len(completed)} ({100*success/len(completed):.1f}%)\n")
+        
+        idx = batch_end
     
-    out = pd.concat([df, pd.DataFrame(save_results)], axis=1)
-    out.to_csv(args.output, index=False)
-    print(f"✓ Saved to {args.output}")
-    
-    # Final stats
-    completed = [r for r in results if r is not None]
-    success = sum(1 for r in completed if r['primer_1_seq'] != 'ERROR' and r['primer_4_seq'] != 'ERROR')
-    partial = sum(1 for r in completed if (r['primer_1_seq'] != 'ERROR') != (r['primer_4_seq'] != 'ERROR'))
-    
+    # Final summary
     print(f"\n{'='*70}")
     print(f"FINAL SUMMARY")
     print(f"{'='*70}")
+    completed = [r for r in all_results if r is not None]
+    success = sum(1 for r in completed 
+                if r['primer_1_seq'] not in ['ERROR', None] 
+                and r['primer_4_seq'] not in ['ERROR', None])
+    partial = sum(1 for r in completed 
+                 if (r['primer_1_seq'] not in ['ERROR', None]) != (r['primer_4_seq'] not in ['ERROR', None]))
+    
     print(f"Total: {len(completed)}")
     print(f"Both primers: {success} ({100*success/len(completed):.1f}%)")
     print(f"One primer: {partial}")
